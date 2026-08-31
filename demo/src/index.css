@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  background: #1e1e1e;
+  color: #d4d4d4;
+}
+
+/*
+ * react-ui 的 default-theme 组件默认输出一套浅色 --aui-* 变量，
+ * 与本页深色主题冲突（行内代码/用户气泡会渲染成近白"芯片"）。
+ * 这里统一覆盖为深色主题（与 tailwind.config.js 的 colors 一致）。
+ * 变量格式为 HSL 三元组，组件内以 hsl(var(--aui-x)) 使用。
+ */
+:root {
+  --aui-background: 0 0% 11.8%; /* #1e1e1e */
+  --aui-foreground: 0 0% 83.1%; /* #d4d4d4 */
+  --aui-card: 0 0% 14.5%; /* #252526 */
+  --aui-card-foreground: 0 0% 83.1%;
+  --aui-popover: 0 0% 14.5%;
+  --aui-popover-foreground: 0 0% 83.1%;
+  --aui-primary: 206 84% 33%; /* #0e639c */
+  --aui-primary-foreground: 0 0% 100%;
+  --aui-secondary: 0 0% 17.6%; /* #2d2d30 */
+  --aui-secondary-foreground: 0 0% 83.1%;
+  --aui-muted: 0 0% 17.6%; /* #2d2d30 */
+  --aui-muted-foreground: 0 0% 54.1%; /* #8a8a8a */
+  --aui-accent: 211 47% 31.8%; /* #264f78 */
+  --aui-accent-foreground: 0 0% 100%;
+  --aui-destructive: 0 86% 61%; /* #f14c4c */
+  --aui-destructive-foreground: 0 0% 100%;
+  --aui-border: 0 0% 23.5%; /* #3c3c3c */
+  --aui-input: 0 0% 23.5%;
+  --aui-ring: 173 54% 48%; /* #4ec9b0 */
+}
+
+/* 行内代码：去掉默认的近白背景 + 1px 边框 + 粗体"芯片"观感，改为柔和深色（无边框） */
+.aui-md-inline-code {
+  background-color: #2a2a2a;
+  border: 0;
+  border-radius: 4px;
+  padding: 0.05em 0.35em;
+  font-weight: 500;
+  color: #e2e2e2;
+}
+
+/* 代码块：react-ui 默认未给 pre/code 深色背景，补上以防白底 */
+.aui-md-pre {
+  background-color: #1a1a1a;
+  border: 1px solid hsl(var(--aui-border));
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+}
+.aui-md-pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-weight: 400;
+}
+
+/* 用户气泡：深色填充，避免近白胶囊在深色页面上突兀 */
+.aui-user-message-content {
+  background-color: #2d2d30;
+  border: 0;
+  color: #d4d4d4;
+}
+
+/*
+ * 深色细滚动条：浏览器默认滚动条是浅灰轨道，在深色主题里很突兀。
+ * 统一为透明轨道 + 深灰圆角滑块（代码块横条、消息列表、会话栏都生效）。
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #4a4a4a transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #4a4a4a;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #5a5a5a;
+  background-clip: content-box;
+}

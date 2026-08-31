@@ -1,0 +1,140 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  background: #1e1e1e;
+  color: #d4d4d4;
+}
+
+/* ============================================================
+   markdown 正文（react-markdown 输出）
+   ============================================================ */
+.markdown-body {
+  word-break: break-word;
+}
+.markdown-body > *:first-child {
+  margin-top: 0;
+}
+.markdown-body > *:last-child {
+  margin-bottom: 0;
+}
+.markdown-body p {
+  margin: 0.4em 0;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 0.8em 0 0.4em;
+  font-weight: 600;
+}
+.markdown-body h1 {
+  font-size: 1.25em;
+}
+.markdown-body h2 {
+  font-size: 1.15em;
+}
+.markdown-body h3 {
+  font-size: 1.05em;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.4em 0;
+  padding-left: 1.4em;
+}
+.markdown-body ul {
+  list-style: disc;
+}
+.markdown-body ol {
+  list-style: decimal;
+}
+.markdown-body ul ul {
+  list-style: circle;
+}
+/* 紧跟在段落后的列表视为该段落的子项（模型常用"编号小标题段落 + 列表"组织内容），缩进体现层级 */
+.markdown-body p + ul,
+.markdown-body p + ol {
+  margin-left: 1.4em;
+}
+.markdown-body li {
+  margin: 0.15em 0;
+}
+.markdown-body a {
+  color: #4ec9b0;
+  text-decoration: underline;
+}
+.markdown-body blockquote {
+  margin: 0.5em 0;
+  padding-left: 0.8em;
+  border-left: 3px solid #3c3c3c;
+  color: #8a8a8a;
+}
+.markdown-body table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid #3c3c3c;
+  padding: 0.3em 0.6em;
+}
+.markdown-body th {
+  background: #2d2d30;
+}
+
+/* 行内代码：柔和深色（无边框芯片观感） */
+.markdown-body code {
+  background-color: #2a2a2a;
+  border-radius: 4px;
+  padding: 0.05em 0.35em;
+  font-weight: 500;
+  color: #e2e2e2;
+  font-size: 0.9em;
+}
+/* 代码块 */
+.markdown-body pre {
+  background-color: #1a1a1a;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.markdown-body pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-weight: 400;
+  color: #d4d4d4;
+}
+
+/* ============================================================
+   深色细滚动条
+   ============================================================ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3c3c3c transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #3c3c3c;
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #4c4c4c;
+}

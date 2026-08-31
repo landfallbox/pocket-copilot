@@ -1,0 +1,10 @@
+{
+  "name": "Copilot Bridge",
+  "short_name": "CopilotBridge",
+  "description": "手机远程查看 PC 上 VS Code 内置 Copilot 会话",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1e1e1e",
+  "theme_color": "#1e1e1e",
+  "lang": "zh-CN"
+}
