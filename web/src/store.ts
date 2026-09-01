@@ -212,15 +212,6 @@ export function selectSession(sessionId: string) {
   }
 }
 
-/** 刷新当前会话：重新请求服务端 replay（拉取最新 turns） */
-export function refreshActive() {
-  const s = useDemoStore.getState();
-  const id = s.activeSessionId;
-  if (id && ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'replay', sessionId: id }));
-  }
-}
-
 /** 写路径：向当前激活会话发送消息（bridge 经 UIA 注入 VS Code） */
 export function sendMessage(text: string) {
   const s = useDemoStore.getState();

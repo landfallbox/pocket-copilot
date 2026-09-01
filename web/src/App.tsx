@@ -29,7 +29,6 @@ import {
   TaskListLtrRegular as ListChecksIcon,
   CodeRegular as CodeIcon,
   NavigationRegular as MenuIcon,
-  ArrowClockwiseRegular as RefreshIcon,
   ChatRegular as ChatIcon,
 } from '@fluentui/react-icons';
 import {
@@ -37,7 +36,6 @@ import {
   startConnection,
   selectSession,
   sendMessage,
-  refreshActive,
   type SessionState,
 } from './store';
 import { sessionToMessages, type Message, type Part } from './convert';
@@ -447,11 +445,11 @@ function EmptyState({ hasSession }: { hasSession: boolean }) {
       <div className={styles.title}>
         {hasSession ? '此会话暂无消息' : '开始一段对话'}
       </div>
-      <div className={styles.sub}>
-        {hasSession
-          ? '点击下方刷新重试，或发送一条消息'
-          : '从左侧选择一个会话，或直接输入消息发送到 VS Code'}
-      </div>
+      {!hasSession && (
+        <div className={styles.sub}>
+          从左侧选择一个会话，或直接输入消息发送到 VS Code
+        </div>
+      )}
     </div>
   );
 }
@@ -1073,15 +1071,6 @@ export default function App() {
               onClick={() => setTitleMenuOpen(false)}
             />
           )}
-          <button
-            className={appStyles_.iconBtn}
-            onClick={() => refreshActive()}
-            disabled={!activeSessionId}
-            style={activeSessionId ? undefined : { opacity: 0.4 }}
-            aria-label="刷新"
-          >
-            <RefreshIcon fontSize={17} />
-          </button>
         </header>
         {error && (
           <div className={appStyles_.error}>
