@@ -31,6 +31,9 @@ import {
   NavigationRegular as MenuIcon,
   ArrowClockwiseRegular as RefreshIcon,
   ChatRegular as ChatIcon,
+  SettingsRegular as SettingsIcon,
+  EyeOffRegular as EyeOffIcon,
+  CheckmarkRegular as CheckmarkIcon,
 } from '@fluentui/react-icons';
 import {
   useDemoStore,
@@ -38,6 +41,8 @@ import {
   selectSession,
   sendMessage,
   refreshActive,
+  isProjectVisible,
+  toggleProject,
   type SessionState,
 } from './store';
 import { sessionToMessages, type Message, type Part } from './convert';
@@ -701,6 +706,85 @@ const sidebarStyles = makeStyles({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
+  // 项目头右侧的隐藏按钮（覆盖在分组头右侧，阻止冒泡避免触发折叠）
+  eyeBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '24px',
+    height: '24px',
+    borderRadius: '6px',
+    border: 0,
+    background: 'transparent',
+    color: 'var(--vscode-muted-fg)',
+    cursor: 'pointer',
+    flexShrink: 0,
+    opacity: 0,
+    transition: 'opacity 0.12s, background-color 0.12s',
+  },
+  eyeBtnHover: {
+    opacity: 1,
+    background: 'var(--vscode-muted)',
+  },
+  // 项目头 hover 时显示隐藏按钮（用 group 选择器在 JSX 内联实现）
+  // “管理项目”面板（覆盖在侧边栏内容之上，勾选全量项目）
+  managePanel: {
+    position: 'absolute',
+    inset: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    backgroundColor: 'var(--vscode-card)',
+    zIndex: 5,
+  },
+  manageHead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '14px 16px 10px',
+  },
+  manageTitle: {
+    flex: 1,
+    fontSize: '15px',
+    fontWeight: 600,
+  },
+  manageRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    width: '100%',
+    padding: '10px 12px',
+    borderRadius: '10px',
+    fontSize: '14px',
+    textAlign: 'left',
+    cursor: 'pointer',
+    border: 0,
+    background: 'transparent',
+    color: 'var(--vscode-foreground)',
+  },
+  manageRowActive: {
+    backgroundColor: 'var(--vscode-muted)',
+  },
+  manageCheck: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '20px',
+    height: '20px',
+    borderRadius: '6px',
+    border: '1px solid var(--vscode-border)',
+    color: 'var(--vscode-foreground)',
+    flexShrink: 0,
+  },
+  manageCheckOn: {
+    backgroundColor: 'var(--vscode-tk-button-background, #0e639c)',
+    border: '1px solid var(--vscode-tk-button-background, #0e639c)',
+    color: '#fff',
+  },
+  manageCount: {
+    marginLeft: 'auto',
+    fontSize: '11px',
+    color: 'var(--vscode-muted-fg)',
+  },
 });
 
 function SessionItem({
@@ -748,8 +832,13 @@ function Sidebar({
 }) {
   const styles = sidebarStyles();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [managing, setManaging] = useState(false);
+  // 订阅可见项目变化（切换项目后重算）
+  useDemoStore((s) => s.visibleProjects);
+  useDemoStore((s) => s.version);
 
-  const groups = useMemo(() => {
+  // 全量项目分组（含会话数 + 最近活动），用于"管理项目"面板
+  const allGroups = useMemo(() => {
     const byProject = new Map<string, SessionState[]>();
     for (const s of sessions) {
       const key = s.project || '未分组';
@@ -766,6 +855,12 @@ function Sidebar({
       .sort((a, b) => b.lastActivity - a.lastActivity);
   }, [sessions]);
 
+  // 仅可见项目（在 visibleProjects 列表中）
+  const groups = useMemo(
+    () => allGroups.filter((g) => isProjectVisible(g.project)),
+    [allGroups],
+  );
+
   const toggle = (key: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -778,49 +873,58 @@ function Sidebar({
   const header = (
     <div className={styles.panelHead}>
       <span className={styles.panelTitle}>会话</span>
+      <button
+        className={styles.closeBtn}
+        onClick={() => setManaging(true)}
+        aria-label="管理项目"
+        title="管理项目"
+      >
+        <SettingsIcon fontSize={16} />
+      </button>
       <button className={styles.closeBtn} onClick={onClose} aria-label="关闭">
         <DismissIcon fontSize={16} />
       </button>
     </div>
   );
 
-  if (groups.length === 0) {
-    return (
-      <div className={styles.panel}>
-        {header}
-        <div
-          style={{
-            padding: '16px 12px',
-            textAlign: 'center',
-            fontSize: '12px',
-            color: 'var(--vscode-muted-fg)',
-          }}
+  // "管理项目"面板：覆盖在侧边栏内容之上，列出全量项目供勾选
+  const managePanel = managing ? (
+    <div className={styles.managePanel}>
+      <div className={styles.manageHead}>
+        <span className={styles.manageTitle}>管理项目</span>
+        <button
+          className={styles.closeBtn}
+          onClick={() => setManaging(false)}
+          aria-label="关闭"
         >
-          暂无会话
-        </div>
+          <DismissIcon fontSize={16} />
+        </button>
       </div>
-    );
-  }
-
-  return (
-    <div className={styles.panel}>
-      {header}
-      <nav className="flex-1 overflow-y-auto" style={{ padding: '8px' }}>
-      {groups.map((g) => {
-        const isCollapsed = collapsed.has(g.project);
-        return (
-          <div key={g.project} style={{ marginBottom: '4px' }}>
+      <nav
+        className="flex-1 overflow-y-auto"
+        style={{ padding: '4px 8px 16px' }}
+      >
+        {allGroups.map((g) => {
+          const visible = isProjectVisible(g.project);
+          return (
             <button
-              className={styles.groupHeader}
-              onClick={() => toggle(g.project)}
+              key={g.project}
+              className={
+                visible
+                  ? `${styles.manageRow} ${styles.manageRowActive}`
+                  : styles.manageRow
+              }
+              onClick={() => toggleProject(g.project)}
             >
-              <ChevronRightIcon
-                fontSize={14}
-                style={{
-                  transform: isCollapsed ? 'rotate(0)' : 'rotate(90deg)',
-                  transition: 'transform 0.15s',
-                }}
-              />
+              <span
+                className={
+                  visible
+                    ? `${styles.manageCheck} ${styles.manageCheckOn}`
+                    : styles.manageCheck
+                }
+              >
+                {visible && <CheckmarkIcon fontSize={14} />}
+              </span>
               <span
                 style={{
                   overflow: 'hidden',
@@ -830,34 +934,121 @@ function Sidebar({
               >
                 {g.project}
               </span>
-              <span style={{ marginLeft: 'auto', fontSize: '10px', opacity: 0.7 }}>
-                {g.list.length}
-              </span>
+              <span className={styles.manageCount}>{g.list.length}</span>
             </button>
-            {!isCollapsed && (
-              <div
-                style={{
-                  marginTop: '2px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '2px',
-                  paddingLeft: '4px',
-                }}
-              >
-                {g.list.map((s) => (
-                  <SessionItem
-                    key={s.sessionId}
-                    sess={s}
-                    active={s.sessionId === activeSessionId}
-                    onSelect={() => onPick(s.sessionId)}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
+          );
+        })}
       </nav>
+    </div>
+  ) : null;
+
+  if (groups.length === 0) {
+    return (
+      <div className={styles.panel} style={{ position: 'relative' }}>
+        {header}
+        <div
+          style={{
+            padding: '16px 12px',
+            textAlign: 'center',
+            fontSize: '12px',
+            color: 'var(--vscode-muted-fg)',
+          }}
+        >
+          暂无可见项目
+          <div style={{ marginTop: '8px' }}>
+            点击右上角齿轮，选择要显示的项目
+          </div>
+        </div>
+        {managePanel}
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.panel} style={{ position: 'relative' }}>
+      {header}
+      <nav className="flex-1 overflow-y-auto" style={{ padding: '8px' }}>
+        {groups.map((g) => {
+          const isCollapsed = collapsed.has(g.project);
+          return (
+            <div key={g.project} style={{ marginBottom: '4px' }}>
+              <div
+                className={styles.groupHeader}
+                onClick={() => toggle(g.project)}
+                onMouseEnter={(e) =>
+                  (
+                    e.currentTarget.querySelector('[data-eye]') as
+                      | HTMLElement
+                      | null
+                  )?.style.setProperty('opacity', '1')
+                }
+                onMouseLeave={(e) =>
+                  (
+                    e.currentTarget.querySelector('[data-eye]') as
+                      | HTMLElement
+                      | null
+                  )?.style.setProperty('opacity', '0')
+                }
+              >
+                <ChevronRightIcon
+                  fontSize={14}
+                  style={{
+                    transform: isCollapsed ? 'rotate(0)' : 'rotate(90deg)',
+                    transition: 'transform 0.15s',
+                    flexShrink: 0,
+                  }}
+                />
+                <span
+                  style={{
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {g.project}
+                </span>
+                <span style={{ fontSize: '10px', opacity: 0.7, flexShrink: 0 }}>
+                  {g.list.length}
+                </span>
+                <button
+                  data-eye
+                  className={styles.eyeBtn}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleProject(g.project);
+                  }}
+                  aria-label="隐藏项目"
+                  title="隐藏项目"
+                >
+                  <EyeOffIcon fontSize={14} />
+                </button>
+              </div>
+              {!isCollapsed && (
+                <div
+                  style={{
+                    marginTop: '2px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '2px',
+                    paddingLeft: '4px',
+                  }}
+                >
+                  {g.list.map((s) => (
+                    <SessionItem
+                      key={s.sessionId}
+                      sess={s}
+                      active={s.sessionId === activeSessionId}
+                      onSelect={() => onPick(s.sessionId)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </nav>
+      {managePanel}
     </div>
   );
 }
