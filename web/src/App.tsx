@@ -1055,14 +1055,15 @@ const appStyles = makeStyles({
     flexDirection: 'column',
     height: '100%',
     overflow: 'hidden',
+    // 盖住 Fluent webDarkTheme wrapper 的默认深灰背景（#292929），透出纯黑
+    backgroundColor: 'var(--vscode-background)',
   },
   header: {
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
     padding: '10px 12px calc(8px + env(safe-area-inset-top))',
-    borderBottom: '1px solid var(--vscode-border)',
-    backgroundColor: 'var(--vscode-card)',
+    backgroundColor: 'var(--vscode-background)',
   },
   iconBtn: {
     display: 'flex',
