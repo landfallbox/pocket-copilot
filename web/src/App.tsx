@@ -655,23 +655,9 @@ const sidebarStyles = makeStyles({
     cursor: 'pointer',
     flexShrink: 0,
   },
-  groupHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '4px',
-    width: '100%',
-    padding: '6px 10px',
-    borderRadius: '8px',
-    fontSize: '11px',
-    fontWeight: 600,
-    letterSpacing: '0.03em',
-    color: 'var(--vscode-muted-fg)',
-    cursor: 'pointer',
-    background: 'transparent',
-    border: 0,
-    textAlign: 'left',
-  },
-  item: {
+  // 项目导航行（方案一：侧边栏只列项目，会话切换交给标题下拉）
+  projectRow: {
+    position: 'relative',
     display: 'block',
     width: '100%',
     padding: '8px 10px',
@@ -679,13 +665,12 @@ const sidebarStyles = makeStyles({
     fontSize: '14px',
     textAlign: 'left',
     cursor: 'pointer',
-    border: 0,
     background: 'transparent',
     color: 'var(--vscode-foreground)',
-    opacity: 0.85,
+    opacity: 0.9,
     transition: 'background-color 0.12s',
   },
-  itemActive: {
+  projectRowActive: {
     backgroundColor: 'var(--vscode-muted)',
     opacity: 1,
   },
@@ -779,22 +764,42 @@ const sidebarStyles = makeStyles({
   },
 });
 
-function SessionItem({
-  sess,
+/** 项目导航行：项目名 + 最近会话副标题 + 会话数，点击跳该项目最近会话 */
+function ProjectItem({
+  project,
+  count,
+  recentTitle,
   active,
-  onSelect,
+  onPick,
+  onHide,
 }: {
-  sess: SessionState;
+  project: string;
+  count: number;
+  recentTitle: string;
   active: boolean;
-  onSelect: () => void;
+  onPick: () => void;
+  onHide: () => void;
 }) {
   const styles = sidebarStyles();
-  const label = sess.title || sess.sessionId.slice(0, 8);
   return (
-    <button
-      className={active ? `${styles.item} ${styles.itemActive}` : styles.item}
-      onClick={onSelect}
-      title={sess.title ?? sess.sessionId}
+    <div
+      className={
+        active
+          ? `${styles.projectRow} ${styles.projectRowActive}`
+          : styles.projectRow
+      }
+      onClick={onPick}
+      title={project}
+      onMouseEnter={(e) =>
+        (
+          e.currentTarget.querySelector('[data-eye]') as HTMLElement | null
+        )?.style.setProperty('opacity', '1')
+      }
+      onMouseLeave={(e) =>
+        (
+          e.currentTarget.querySelector('[data-eye]') as HTMLElement | null
+        )?.style.setProperty('opacity', '0')
+      }
     >
       <span
         style={{
@@ -804,10 +809,30 @@ function SessionItem({
           whiteSpace: 'nowrap',
         }}
       >
-        {label}
+        {project}
       </span>
-      {sess.model && <span className={styles.model}>{sess.model}</span>}
-    </button>
+      <span className={styles.model} style={{ paddingRight: '28px' }}>
+        {recentTitle} · {count} 会话
+      </span>
+      <button
+        data-eye
+        className={styles.eyeBtn}
+        style={{
+          position: 'absolute',
+          right: '8px',
+          top: '50%',
+          transform: 'translateY(-50%)',
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onHide();
+        }}
+        aria-label="隐藏项目"
+        title="隐藏项目"
+      >
+        <EyeOffIcon fontSize={14} />
+      </button>
+    </div>
   );
 }
 
@@ -823,11 +848,20 @@ function Sidebar({
   onClose: () => void;
 }) {
   const styles = sidebarStyles();
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [managing, setManaging] = useState(false);
   // 订阅可见项目变化（切换项目后重算）
   useDemoStore((s) => s.visibleProjects);
   useDemoStore((s) => s.version);
+
+  // 当前会话所属项目（侧边栏高亮用）
+  const activeProject = useMemo(
+    () =>
+      activeSessionId
+        ? (sessions.find((s) => s.sessionId === activeSessionId)?.project ??
+          null)
+        : null,
+    [sessions, activeSessionId],
+  );
 
   // 全量项目分组（含会话数 + 最近活动），用于"管理项目"面板
   const allGroups = useMemo(() => {
@@ -852,15 +886,6 @@ function Sidebar({
     () => allGroups.filter((g) => isProjectVisible(g.project)),
     [allGroups],
   );
-
-  const toggle = (key: string) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
 
   const header = (
     <div className={styles.panelHead}>
@@ -960,85 +985,19 @@ function Sidebar({
     <div className={styles.panel} style={{ position: 'relative' }}>
       {header}
       <nav className="flex-1 overflow-y-auto" style={{ padding: '8px' }}>
-        {groups.map((g) => {
-          const isCollapsed = collapsed.has(g.project);
-          return (
-            <div key={g.project} style={{ marginBottom: '4px' }}>
-              <div
-                className={styles.groupHeader}
-                onClick={() => toggle(g.project)}
-                onMouseEnter={(e) =>
-                  (
-                    e.currentTarget.querySelector('[data-eye]') as
-                      | HTMLElement
-                      | null
-                  )?.style.setProperty('opacity', '1')
-                }
-                onMouseLeave={(e) =>
-                  (
-                    e.currentTarget.querySelector('[data-eye]') as
-                      | HTMLElement
-                      | null
-                  )?.style.setProperty('opacity', '0')
-                }
-              >
-                <ChevronRightIcon
-                  fontSize={14}
-                  style={{
-                    transform: isCollapsed ? 'rotate(0)' : 'rotate(90deg)',
-                    transition: 'transform 0.15s',
-                    flexShrink: 0,
-                  }}
-                />
-                <span
-                  style={{
-                    flex: 1,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {g.project}
-                </span>
-                <span style={{ fontSize: '10px', opacity: 0.7, flexShrink: 0 }}>
-                  {g.list.length}
-                </span>
-                <button
-                  data-eye
-                  className={styles.eyeBtn}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleProject(g.project);
-                  }}
-                  aria-label="隐藏项目"
-                  title="隐藏项目"
-                >
-                  <EyeOffIcon fontSize={14} />
-                </button>
-              </div>
-              {!isCollapsed && (
-                <div
-                  style={{
-                    marginTop: '2px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '2px',
-                    paddingLeft: '4px',
-                  }}
-                >
-                  {g.list.map((s) => (
-                    <SessionItem
-                      key={s.sessionId}
-                      sess={s}
-                      active={s.sessionId === activeSessionId}
-                      onSelect={() => onPick(s.sessionId)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          {groups.map((g) => (
+            <ProjectItem
+              key={g.project}
+              project={g.project}
+              count={g.list.length}
+              recentTitle={g.list[0].title || g.list[0].sessionId.slice(0, 8)}
+              active={g.project === activeProject}
+              onPick={() => onPick(g.list[0].sessionId)}
+              onHide={() => toggleProject(g.project)}
+            />
+          ))}
+        </div>
       </nav>
       {managePanel}
     </div>
