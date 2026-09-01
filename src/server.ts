@@ -61,8 +61,8 @@ let projectNameMap = new Map<string, string>();
 const mappedProjects = new Set<string>();
 
 const tailer = new SessionTailer(WORKSPACE_STORAGE_ROOT, {
-  onRecord: (sessionId, file, rec) => {
-    registry.onJsonl(sessionId, rec);
+  onRecord: (sessionId, file, rec, mtimeMs) => {
+    registry.onJsonl(sessionId, rec, mtimeMs);
     if (!mappedProjects.has(sessionId)) {
       mappedProjects.add(sessionId);
       const hash = workspaceHashOf(file);
@@ -195,10 +195,13 @@ wss.on('connection', (ws) => {
       return;
     }
     if (msg.type === 'replay' && msg.sessionId) {
-      const state = registry.fullState(msg.sessionId);
-      if (state) {
-        ws.send(JSON.stringify({ type: 'replay', ...state }));
-      }
+      const sid = msg.sessionId;
+      void (async () => {
+        const state = await registry.fullState(sid);
+        if (state && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'replay', ...state }));
+        }
+      })();
     } else if (msg.type === 'send_message' && msg.sessionId && msg.text) {
       // 写路径：UIA 注入 VS Code（异步，结果经 send_result 回执给发起方）
       void handleSendMessage(ws, msg.sessionId, msg.text);

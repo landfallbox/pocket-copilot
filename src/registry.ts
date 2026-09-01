@@ -26,6 +26,9 @@ import type {
   SessionSummary,
 } from './types.js';
 import { parseSessionInfo } from './session-info.js';
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+import { HEIMDALL_REQUESTS_DIR } from './config.js';
 
 // ============================================================
 // 常量
@@ -154,7 +157,7 @@ export class Registry {
   // ============================================================
 
   /** 处理一条 jsonl 记录：会话头（kind=0）+ selectedModel 更新（kind=1），其余忽略 */
-  onJsonl(sessionId: string, rec: RawRecord): void {
+  onJsonl(sessionId: string, rec: RawRecord, mtimeMs: number): void {
     const s = this.state(sessionId);
     let modelChanged = false;
     if (rec.kind === 0) {
@@ -171,7 +174,9 @@ export class Registry {
     } else {
       return;
     }
-    s.lastActivity = Date.now();
+    // 用文件 mtime（VS Code 最后碰该会话的时间）而非 Date.now()，
+    // 避免重放历史时所有会话都被标为"刚刚活跃"。
+    s.lastActivity = mtimeMs;
     this.announce(s);
     // 已 announce 的会话切换模型：重推 session_list（否则前端 model 不更新）
     if (modelChanged && s.announced) {
@@ -283,7 +288,7 @@ export class Registry {
     if (!c) return;
     const t = this.sessions.get(c.sessionId)?.turns.get(c.turnId);
     if (!t || t.done) return;
-    t.lastActivity = Date.now();
+    t.lastActivity = Date.parse(rec.time);
 
     if (rec.kind === 'text') {
       this.appendSegment(t, 'text', rec.content);
@@ -346,11 +351,11 @@ export class Registry {
     }
     // 重置本次调用标记，供同 turn 下一次模型调用
     t.sawToolCall = false;
-    if (s) s.lastActivity = Date.now();
+    if (s) s.lastActivity = Date.parse(rec.time);
   }
 
-  /** 按到达顺序 flush 累计的思考/文本段（保持交织顺序），发事件 + 入 items */
-  private flushSegments(t: TurnState): void {
+  /** 按到达顺序 flush 累计的思考/文本段（保持交织顺序），发事件 + 入 items。silent=true 时不 emit（rebuild 路径用） */
+  private flushSegments(t: TurnState, silent = false): void {
     const segs = t.segments;
     t.segments = [];
     // 预处理：模型偶尔在 text 中间穿插纯标点 reasoning 碎片（实测 ".\n"），
@@ -371,7 +376,7 @@ export class Registry {
       const trimmed = seg.content.trim();
       if (!trimmed) continue;
       if (seg.kind === 'reasoning') {
-        if (!t.done) {
+        if (!silent && !t.done) {
           this.emit({
             type: 'chunk',
             sessionId: t.sessionId,
@@ -407,22 +412,33 @@ export class Registry {
       .sort((a, b) => b.lastActivity - a.lastActivity);
   }
 
-  /** 会话完整状态（replay 用） */
-  fullState(sessionId: string): SessionFullState | undefined {
+  /**
+   * 会话完整状态（replay 用）。
+   * 内存有 turns（活跃会话）→ 直接用；内存无 turns（已被 sweep）→ 从 heimdall 文件重建。
+   */
+  async fullState(sessionId: string): Promise<SessionFullState | undefined> {
     const s = this.sessions.get(sessionId);
     if (!s) return undefined;
-    const requests: RequestState[] = s.order
-      .map((id) => s.turns.get(id))
-      .filter((t): t is TurnState => Boolean(t))
-      .map((t) => ({
-        requestId: t.turnId,
-        ts: t.ts,
-        userText: t.userText,
-        items: t.items,
-        done: t.done,
-        promptTokens: t.promptTokens,
-        completionTokens: t.completionTokens,
-      }));
+
+    let requests: RequestState[] = [];
+    if (s.order.length > 0) {
+      requests = s.order
+        .map((id) => s.turns.get(id))
+        .filter((t): t is TurnState => Boolean(t))
+        .map((t) => ({
+          requestId: t.turnId,
+          ts: t.ts,
+          userText: t.userText,
+          items: t.items,
+          done: t.done,
+          promptTokens: t.promptTokens,
+          completionTokens: t.completionTokens,
+        }));
+    }
+    if (requests.length === 0) {
+      requests = await this.rebuildFromFiles(sessionId);
+    }
+
     return {
       sessionId: s.sessionId,
       createdAt: s.createdAt,
@@ -431,6 +447,117 @@ export class Registry {
       title: this.titleOf?.(s.sessionId),
       requests,
     };
+  }
+
+  /**
+   * 从 heimdall 文件重建指定会话的 turns（replay 按需重建，内存无数据时的回退路径）。
+   * 复用与 onHeimdall 相同的聚合逻辑（matchTurn / appendSegment / flushSegments），
+   * 但不 emit 事件、用记录时间戳替代 Date.now()。
+   */
+  private async rebuildFromFiles(sessionId: string): Promise<RequestState[]> {
+    let files: string[] = [];
+    try {
+      const entries = await fsp.readdir(HEIMDALL_REQUESTS_DIR, { withFileTypes: true });
+      files = entries
+        .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
+        .map((e) => path.join(HEIMDALL_REQUESTS_DIR, e.name));
+    } catch {
+      return [];
+    }
+
+    const turns = new Map<string, TurnState>();
+    const order: string[] = [];
+    const calls = new Map<string, string>();
+    let lastActiveTurnId: string | undefined;
+
+    for (const file of files) {
+      let content: string;
+      try { content = await fsp.readFile(file, 'utf8'); } catch { continue; }
+      for (const line of content.split('\n')) {
+        if (!line.trim()) continue;
+        let rec: HeimdallRecord;
+        try { rec = JSON.parse(line) as HeimdallRecord; } catch { continue; }
+        if (rec.version !== 1) continue;
+
+        if (rec.type === 'request_start') {
+          if (!('systemTail' in rec)) continue;
+          const info = parseSessionInfo(rec.systemTail);
+          if (info.sessionId !== sessionId) continue;
+          if (!/<userRequest>[\s\S]*<\/userRequest>/.test(rec.lastUserText)) continue;
+          const userText = extractUserRequest(rec.lastUserText);
+          const startTs = Date.parse(rec.time);
+
+          let turn: TurnState | undefined;
+          if (lastActiveTurnId) {
+            const last = turns.get(lastActiveTurnId);
+            if (last && !last.done && last.userText === userText && startTs - last.lastActivity < TURN_GAP_MS) {
+              turn = last;
+            }
+          }
+          if (!turn) {
+            turn = {
+              turnId: rec.requestId,
+              sessionId,
+              userText,
+              ts: startTs,
+              items: [{ type: 'user', text: userText, ts: startTs }],
+              done: false,
+              segments: [],
+              sawToolCall: false,
+              lastActivity: startTs,
+            };
+            turns.set(turn.turnId, turn);
+            order.push(turn.turnId);
+          }
+          lastActiveTurnId = turn.turnId;
+          calls.set(rec.requestId, turn.turnId);
+        } else if (rec.type === 'chunk') {
+          const turnId = calls.get(rec.requestId);
+          if (!turnId) continue;
+          const t = turns.get(turnId);
+          if (!t || t.done) continue;
+          t.lastActivity = Date.parse(rec.time);
+          if (rec.kind === 'text' || rec.kind === 'reasoning') {
+            const last = t.segments[t.segments.length - 1];
+            if (last && last.kind === rec.kind) last.content += rec.content;
+            else t.segments.push({ kind: rec.kind, content: rec.content });
+          } else if (rec.kind === 'tool_call') {
+            this.flushSegments(t, true);
+            t.sawToolCall = true;
+            const { name } = parseToolCall(rec.content);
+            t.items.push({ type: 'tool_call', tool: { message: name, pastTenseMessage: name, isComplete: true } });
+          }
+        } else if (rec.type === 'request_end') {
+          const turnId = calls.get(rec.requestId);
+          calls.delete(rec.requestId);
+          if (!turnId) continue;
+          const t = turns.get(turnId);
+          if (!t) continue;
+          t.lastActivity = Date.parse(rec.time);
+          this.flushSegments(t, true);
+          if (rec.inputTokens != null) t.promptTokens = (t.promptTokens ?? 0) + rec.inputTokens;
+          if (rec.outputTokens != null) t.completionTokens = (t.completionTokens ?? 0) + rec.outputTokens;
+          if (!t.sawToolCall) {
+            t.done = true;
+            t.elapsedMs = rec.durationMs;
+          }
+          t.sawToolCall = false;
+        }
+      }
+    }
+
+    return order.map((id) => {
+      const t = turns.get(id)!;
+      return {
+        requestId: t.turnId,
+        ts: t.ts,
+        userText: t.userText,
+        items: t.items,
+        done: t.done,
+        promptTokens: t.promptTokens,
+        completionTokens: t.completionTokens,
+      };
+    });
   }
 
   /** 所有会话中最近的活动时间戳（记录源健康判定用） */
@@ -464,7 +591,7 @@ export class Registry {
       s = {
         sessionId,
         createdAt: Date.now(),
-        lastActivity: Date.now(),
+        lastActivity: 0, // 由 onJsonl(mtime) / onEnd(rec.time) 设真实值
         announced: false,
         turns: new Map(),
         order: [],

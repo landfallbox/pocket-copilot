@@ -12,8 +12,6 @@ export interface LineTailerOptions<T> {
   onLine: (file: string, value: T) => void;
   /** 文件被重写（开头内容变化）时回调 */
   onRewrite?: (file: string) => void;
-  /** mtime 在该窗口内的文件从 0 重放，否则只 tail 新增内容 */
-  replayWindowMs?: number;
   /** 轮询兜底间隔（ms）。默认 1000；需要低延迟流式时调短（如 heimdall chunk 源） */
   pollMs?: number;
 }
@@ -78,21 +76,9 @@ export class LineTailer<T> {
   private async track(file: string): Promise<void> {
     if (this.tracking.has(file)) return;
     this.tracking.add(file);
-    let size = 0;
-    let mtimeMs = 0;
-    try {
-      const st = await fsp.stat(file);
-      size = st.size;
-      mtimeMs = st.mtimeMs;
-    } catch {
-      return;
-    }
-    const window = this.opts.replayWindowMs ?? 24 * 60 * 60 * 1000;
-    const replay = Date.now() - mtimeMs < window;
-    this.offsets.set(file, replay ? 0 : size);
-    if (replay) {
-      await this.drain(file);
-    }
+    // 从 0 整读建立内存状态，之后 offset 推进、仅 tail 新增内容。
+    this.offsets.set(file, 0);
+    await this.drain(file);
   }
 
   /**

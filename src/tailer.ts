@@ -5,13 +5,11 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import type { RawRecord } from './types.js';
 
 export interface TailCallbacks {
-  onRecord: (sessionId: string, filePath: string, rec: RawRecord) => void;
+  /** mtimeMs：文件最后修改时间（用于 lastActivity 真实时间戳） */
+  onRecord: (sessionId: string, filePath: string, rec: RawRecord, mtimeMs: number) => void;
   /** 文件被重写（开头内容变化）时回调，调用方应重置该会话状态 */
   onRewrite?: (sessionId: string) => void;
 }
-
-/** mtime 在该窗口内的会话文件从 0 重放，否则只 tail 新增内容 */
-const REPLAY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
  * 跨 workspace 监听 %APPDATA%\Code\User\workspaceStorage\*\chatSessions\*.jsonl，
@@ -114,20 +112,10 @@ export class SessionTailer {
   private async track(file: string): Promise<void> {
     if (this.tracking.has(file)) return;
     this.tracking.add(file);
-    let size = 0;
-    let mtimeMs = 0;
-    try {
-      const st = await fsp.stat(file);
-      size = st.size;
-      mtimeMs = st.mtimeMs;
-    } catch {
-      return;
-    }
-    const replay = Date.now() - mtimeMs < REPLAY_WINDOW_MS;
-    this.offsets.set(file, replay ? 0 : size);
-    if (replay) {
-      await this.drain(file);
-    }
+    // 从 0 整读：会话文件是侧边栏注册来源，必须纳入全部历史会话；
+    // 之后 offset 推进、仅 tail 新增内容。
+    this.offsets.set(file, 0);
+    await this.drain(file);
   }
 
   /**
@@ -193,9 +181,11 @@ export class SessionTailer {
 
   private async drainOnce(file: string): Promise<void> {
     let size: number;
+    let mtimeMs = 0;
     try {
       const st = await fsp.stat(file);
       size = st.size;
+      mtimeMs = st.mtimeMs;
     } catch {
       return;
     }
@@ -263,7 +253,7 @@ export class SessionTailer {
         } catch {
           continue;
         }
-        this.cb.onRecord(sessionId, file, rec);
+        this.cb.onRecord(sessionId, file, rec, mtimeMs);
       }
     } finally {
       await handle.close();
