@@ -1,14 +1,27 @@
-import type { ThreadMessageLike } from '@assistant-ui/react';
 import type { RequestState } from './store';
 
-/** 把一个请求（items 时间线）转成 assistant-ui 的 user + assistant 消息 */
-export function requestToMessages(r: RequestState): ThreadMessageLike[] {
-  const out: ThreadMessageLike[] = [];
+// ============================================================================
+// = 消息模型（脱离 assistant-ui，前端自定义）                                 =
+// ============================================================================
+
+/** 助手消息内的一个片段：文本 / 思考 / 工具调用 */
+export type Part =
+  | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string }
+  | { type: 'tool-call'; toolCallId: string; toolName: string; label: string };
+
+export type Message =
+  | { id: string; role: 'user'; text: string }
+  | { id: string; role: 'assistant'; parts: Part[]; done: boolean };
+
+/** 把一个请求（items 时间线）转成 user + assistant 消息 */
+export function requestToMessages(r: RequestState): Message[] {
+  const out: Message[] = [];
   if (r.userText) {
-    out.push({ id: `${r.requestId}-user`, role: 'user', content: r.userText });
+    out.push({ id: `${r.requestId}-user`, role: 'user', text: r.userText });
   }
 
-  const parts: any[] = [];
+  const parts: Part[] = [];
   for (const it of r.items) {
     if (it.type === 'thinking') {
       // replay 路径后端 items 用 text，流式 chunk 用 delta，两者兼容
@@ -21,8 +34,7 @@ export function requestToMessages(r: RequestState): ThreadMessageLike[] {
         type: 'tool-call',
         toolCallId: it.tool.toolCallId ?? `${r.requestId}-t${parts.length}`,
         toolName: it.tool.toolId ?? 'tool',
-        args: { message: it.tool.message ?? '' },
-        argsText: it.tool.message ?? '',
+        label: it.tool.pastTenseMessage || it.tool.message || it.tool.toolId || 'tool',
       });
     } else if (it.type === 'question' && it.question) {
       const q = it.question;
@@ -32,31 +44,27 @@ export function requestToMessages(r: RequestState): ThreadMessageLike[] {
       });
     } else if (it.type === 'edit' && it.edit) {
       // 编辑文件也作为工具调用折叠进 "Finished with x steps"（对齐 Copilot 行为）
-      const label = `编辑文件：${it.edit.fsPath ?? '?'}`;
       parts.push({
         type: 'tool-call',
         toolCallId: `${r.requestId}-edit${parts.length}`,
         toolName: 'edit',
-        args: { message: label },
-        argsText: label,
+        label: `编辑文件：${it.edit.fsPath ?? '?'}`,
       });
     }
-    // status 项：耗时/token 由 assistant 消息状态体现，不单独渲染
+    // status 项：耗时/token 不单独渲染
   }
 
   if (parts.length > 0) {
-    out.push({
-      id: `${r.requestId}-asst`,
-      role: 'assistant',
-      content: parts,
-      status: r.done ? { type: 'complete' } : { type: 'running' },
-    });
+    out.push({ id: `${r.requestId}-asst`, role: 'assistant', parts, done: r.done });
   }
   return out;
 }
 
-export function sessionToMessages(order: string[], requests: Map<string, RequestState>): ThreadMessageLike[] {
-  const out: ThreadMessageLike[] = [];
+export function sessionToMessages(
+  order: string[],
+  requests: Map<string, RequestState>,
+): Message[] {
+  const out: Message[] = [];
   for (const rid of order) {
     const r = requests.get(rid);
     if (r) out.push(...requestToMessages(r));

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { fetchTheme, applyTheme, type ThemeInfo } from './theme';
 
 /** 与主服务 BridgeEvent 同构（只声明 demo 用到的字段） */
 type Tool = {
@@ -49,6 +50,10 @@ type DemoStore = {
   version: number;
   /** 后端上报的错误（如 systemTail 解析失败），非空时顶部显示 banner */
   error: string | null;
+  /** 写路径：发送中（send_message 已发出、send_result 未回执） */
+  sending: boolean;
+  /** 活动主题（/api/theme），驱动 CSS 变量 + 代码高亮色表 */
+  theme: ThemeInfo | null;
 };
 
 export const useDemoStore = create<DemoStore>(() => ({
@@ -57,6 +62,8 @@ export const useDemoStore = create<DemoStore>(() => ({
   activeSessionId: null,
   version: 0,
   error: null,
+  sending: false,
+  theme: null,
 }));
 
 const bump = () => useDemoStore.setState((s) => ({ version: s.version + 1 }));
@@ -84,6 +91,19 @@ function ensureRequest(sess: SessionState, requestId: string): RequestState {
 function handleEvent(e: Record<string, any>) {
   if (e.type === 'error') {
     useDemoStore.setState({ error: e.message ?? '未知错误' });
+    return;
+  }
+
+  if (e.type === 'send_result') {
+    // 写路径回执：成功时消息会经 jsonl/heimdall 读路径自然回流，无需本地插入
+    if (!e.ok) {
+      useDemoStore.setState({
+        sending: false,
+        error: e.error ?? '发送失败',
+      });
+    } else {
+      useDemoStore.setState({ sending: false });
+    }
     return;
   }
 
@@ -181,6 +201,13 @@ export function startConnection() {
   if (started) return;
   started = true;
   connect();
+  // 拉取活动主题并注入 CSS 变量（失败降级：保留 index.css 内置深色兜底）
+  fetchTheme().then((info) => {
+    if (info) {
+      applyTheme(info);
+      useDemoStore.setState({ theme: info });
+    }
+  });
 }
 
 /** 切换会话：设置激活 id 并请求服务端 replay（重复点击同一会话不重发） */
@@ -191,6 +218,24 @@ export function selectSession(sessionId: string) {
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'replay', sessionId }));
   }
+}
+
+/** 刷新当前会话：重新请求服务端 replay（拉取最新 turns） */
+export function refreshActive() {
+  const s = useDemoStore.getState();
+  const id = s.activeSessionId;
+  if (id && ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'replay', sessionId: id }));
+  }
+}
+
+/** 写路径：向当前激活会话发送消息（bridge 经 UIA 注入 VS Code） */
+export function sendMessage(text: string) {
+  const s = useDemoStore.getState();
+  const id = s.activeSessionId;
+  if (!id || s.sending || ws?.readyState !== WebSocket.OPEN) return;
+  useDemoStore.setState({ sending: true, error: null });
+  ws.send(JSON.stringify({ type: 'send_message', sessionId: id, text }));
 }
 
 function connect() {

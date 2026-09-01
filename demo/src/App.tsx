@@ -1,157 +1,186 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AssistantRuntimeProvider,
-  MessagePrimitive,
-  useAssistantState,
-  useExternalStoreRuntime,
-  type ThreadMessageLike,
-} from '@assistant-ui/react';
-import { useShallow } from 'zustand/shallow';
-import {
-  Thread,
-  makeMarkdownText,
-  UserMessage as DefaultUserMessage,
-  UserActionBar,
-  AssistantMessage as DefaultAssistantMessage,
-  AssistantActionBar,
-  BranchPicker,
-} from '@assistant-ui/react-ui';
-import {
-  Brain,
-  Bug,
-  ChevronRight,
-  CircleCheck,
-  Code2,
-  FileCode2,
-  FilePen,
-  FilePlus,
-  FileText,
-  FolderOpen,
-  Globe,
-  ListChecks,
-  LoaderCircle,
-  Play,
-  Search,
-  Terminal,
-  Wrench,
-} from 'lucide-react';
+  FluentProvider,
+  webDarkTheme,
+  webLightTheme,
+  Spinner,
+  makeStyles,
+} from '@fluentui/react-components';
+import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useDemoStore, startConnection, selectSession, type SessionState } from './store';
-import { sessionToMessages } from './convert';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import {
+  ChevronRightRegular as ChevronRightIcon,
+  DismissRegular as DismissIcon,
+  SendRegular as SendIcon,
+  CheckmarkCircleRegular as CheckmarkCircleIcon,
+  WrenchRegular as WrenchIcon,
+  DocumentRegular as DocumentIcon,
+  DocumentAddRegular as DocumentAddIcon,
+  DocumentEditRegular as DocumentEditIcon,
+  FolderOpenRegular as FolderOpenIcon,
+  SearchRegular as SearchIcon,
+  BugRegular as BugIcon,
+  BrainRegular as BrainIcon,
+  GlobeRegular as GlobeIcon,
+  WindowRegular as TerminalIcon,
+  PlayRegular as PlayIcon,
+  TaskListLtrRegular as ListChecksIcon,
+  CodeRegular as CodeIcon,
+  NavigationRegular as MenuIcon,
+  ArrowClockwiseRegular as RefreshIcon,
+  ChatRegular as ChatIcon,
+} from '@fluentui/react-icons';
+import {
+  useDemoStore,
+  startConnection,
+  selectSession,
+  sendMessage,
+  refreshActive,
+  type SessionState,
+} from './store';
+import { sessionToMessages, type Message, type Part } from './convert';
 
-/** 只读模式：隐藏输入框（写方向是 Spike 2 的事） */
-function ReadOnlyFooter() {
-  return (
-    <div className="px-4 py-3 text-center text-xs text-muted-foreground border-t border-border">
-      只读视图 · 写方向（Spike 2）开发中
-    </div>
-  );
+// ============================================================================
+// = 主题                                                                      =
+// ============================================================================
+
+/** 根据活动主题选择 Fluent 基底（dark/light），语义色由 --vscode-* 变量统一覆盖 */
+function useFluentBaseTheme() {
+  const theme = useDemoStore((s) => s.theme);
+  return theme && (theme.uiTheme === 'light' || theme.uiTheme === 'hcLight')
+    ? webLightTheme
+    : webDarkTheme;
 }
 
-/**
- * markdown 文本组件（react-ui 默认 Text 是纯文本，需显式挂上 markdown 渲染）。
- * 注入 remark-gfm：react-markdown v10 默认仅 CommonMark，表格/删除线/任务列表等
- * GFM 语法必须靠该插件，否则 `|` 表格会被当纯文本渲染。
- */
-const MarkdownText = makeMarkdownText({ remarkPlugins: [remarkGfm] });
+// ============================================================================
+// = 工具 → 图标                                                               =
+// ============================================================================
 
-/**
- * 用户消息：复用 react-ui 默认结构，仅把 Text 换成 markdown 渲染。
- * （react-ui 的 userMessage 配置不消费 components.Text，必须整体覆盖 UserMessage）
- */
-function MarkdownUserMessage() {
-  return (
-    <DefaultUserMessage.Root>
-      <DefaultUserMessage.Attachments />
-      <MessagePrimitive.If hasContent>
-        <UserActionBar />
-        <DefaultUserMessage.Content components={{ Text: MarkdownText }} />
-      </MessagePrimitive.If>
-      <BranchPicker />
-    </DefaultUserMessage.Root>
-  );
-}
-
-/* ---------------- 工具 → 图标 ---------------- */
-
-const ICON_RULES: Array<[RegExp, typeof FileText]> = [
-  [/readFile|ReadFile/, FileText],
-  [/createFile|CreateFile/, FilePlus],
-  [/replaceString|ReplaceString|multiReplace|MultiReplace|replace/, FilePen],
-  [/edit|Edit/, FilePen],
-  [/listDirectory|ListDirectory/, FolderOpen],
-  [/findText|FindText|search|Search/, Search],
-  [/getErrors|GetErrors|diagnostic|Diagnostic/, Bug],
-  [/memory|Memory/, Brain],
-  [/browser|Browser|navigate|Navigate|read_page|screenshot/, Globe],
-  [/terminal|Terminal/, Terminal],
-  [/playwright|Playwright|run_code/, Play],
-  [/todo|Todo|task|Task/, ListChecks],
-  [/github|Github|GitHub/, Code2],
-  [/fetch|Fetch|web|Web/, Globe],
-  [/code|Code/, FileCode2],
+const ICON_RULES: Array<[RegExp, typeof DocumentIcon]> = [
+  [/readFile|ReadFile/, DocumentIcon],
+  [/createFile|CreateFile/, DocumentAddIcon],
+  [/replaceString|ReplaceString|multiReplace|MultiReplace|replace|edit|Edit/, DocumentEditIcon],
+  [/listDirectory|ListDirectory/, FolderOpenIcon],
+  [/findText|FindText|search|Search/, SearchIcon],
+  [/getErrors|GetErrors|diagnostic|Diagnostic/, BugIcon],
+  [/memory|Memory/, BrainIcon],
+  [/browser|Browser|navigate|Navigate|read_page|screenshot|fetch|Fetch|web|Web/, GlobeIcon],
+  [/terminal|Terminal/, TerminalIcon],
+  [/playwright|Playwright|run_code/, PlayIcon],
+  [/todo|Todo|task|Task/, ListChecksIcon],
+  [/github|Github|GitHub|code|Code/, CodeIcon],
 ];
 
-/** 按 toolName 选图标；无法识别时回退 Wrench */
 function toolIcon(toolName: string) {
   for (const [re, Icon] of ICON_RULES) if (re.test(toolName)) return Icon;
-  return Wrench;
+  return WrenchIcon;
 }
 
-/* ---------------- 时间轴 ---------------- */
+// ============================================================================
+// = 时间轴（步骤折叠）                                                        =
+// ============================================================================
 
-type Part = {
-  type: string;
-  text?: string;
-  toolName?: string;
-  args?: { message?: string; pastTenseMessage?: string };
-  argsText?: string;
-};
+const timelineStyles = makeStyles({
+  row: {
+    display: 'flex',
+    gap: '10px',
+    padding: '3px 0',
+    alignItems: 'flex-start',
+  },
+  iconWrap: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '16px',
+    height: '16px',
+    flexShrink: 0,
+    marginTop: '2px',
+    color: 'var(--vscode-muted-fg)',
+  },
+  dot: {
+    width: '6px',
+    height: '6px',
+    borderRadius: '50%',
+    backgroundColor: 'var(--vscode-muted-fg)',
+    opacity: 0.6,
+  },
+  toolLabel: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: '13px',
+    lineHeight: '1.4',
+    color: 'var(--vscode-foreground)',
+    opacity: 0.9,
+  },
+  reasoning: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: '12.5px',
+    lineHeight: '1.5',
+    color: 'var(--vscode-muted-fg)',
+    whiteSpace: 'pre-wrap',
+  },
+});
 
-function isProcessPart(p: Part) {
-  return p.type === 'reasoning' || p.type === 'tool-call';
-}
-
-/** 工具调用的时间轴标签：优先过去式（Read / Searched…），回退进行式，再回退工具名 */
-function toolLabel(p: Part): string {
-  return p.args?.pastTenseMessage || p.args?.message || p.argsText || p.toolName || 'tool';
-}
-
-/** 单条时间轴行：工具调用带图标，思考带圆点 */
 function TimelineRow({ part }: { part: Part }) {
+  const styles = timelineStyles();
   if (part.type === 'tool-call') {
-    const Icon = toolIcon(part.toolName ?? '');
+    const Icon = toolIcon(part.toolName);
     return (
-      <div className="flex gap-2.5 py-1">
-        <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground">
-          <Icon className="h-4 w-4" />
+      <div className={styles.row}>
+        <span className={styles.iconWrap}>
+          <Icon fontSize={14} />
         </span>
-        <span className="min-w-0 flex-1 text-[13px] leading-snug text-foreground/90">
-          {toolLabel(part)}
-        </span>
+        <span className={styles.toolLabel}>{part.label}</span>
       </div>
     );
   }
-  // reasoning
-  const text = (part.text ?? '').trim();
+  const text = part.text.trim();
   if (!text) return null;
   return (
-    <div className="flex gap-2.5 py-1">
-      <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
-        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" />
+    <div className={styles.row}>
+      <span className={styles.iconWrap}>
+        <span className={styles.dot} />
       </span>
-      <span className="min-w-0 flex-1 whitespace-pre-wrap text-[12.5px] leading-relaxed text-muted-foreground">
-        {text}
-      </span>
+      <span className={styles.reasoning}>{text}</span>
     </div>
   );
 }
 
+const stepsStyles = makeStyles({
+  summary: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    cursor: 'pointer',
+    userSelect: 'none',
+    fontSize: '13px',
+    color: 'var(--vscode-muted-fg)',
+  },
+  chevron: {
+    transition: 'transform 0.15s',
+    transform: 'rotate(0deg)',
+  },
+  chevronOpen: {
+    transform: 'rotate(90deg)',
+  },
+  body: {
+    marginTop: '6px',
+    marginLeft: '7px',
+    paddingLeft: '12px',
+    borderLeft: '1px solid var(--vscode-border)',
+  },
+});
+
 /**
  * 一组连续的 思考 + 工具调用 → 折叠时间轴（模仿 Copilot "Finished with x steps"）。
- * 默认折叠；展开后是竖向时间轴，工具行带图标、思考行带圆点。
+ * 默认折叠；展开后竖向时间轴，工具行带图标、思考行带圆点。
  */
 function StepsGroup({ parts, running }: { parts: Part[]; running: boolean }) {
+  const styles = stepsStyles();
+  const [open, setOpen] = useState(false);
   const n = parts.filter((p) => p.type === 'tool-call').length;
   const hasReasoning = parts.some((p) => p.type === 'reasoning');
   const label = running
@@ -160,40 +189,171 @@ function StepsGroup({ parts, running }: { parts: Part[]; running: boolean }) {
       ? `Finished with ${n} step${n === 1 ? '' : 's'}`
       : '思考过程';
   return (
-    <details className="group my-1.5">
-      <summary className="flex cursor-pointer select-none items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground">
-        <ChevronRight className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-90" />
+    <div style={{ margin: '6px 0' }}>
+      <div
+        className={styles.summary}
+        onClick={() => setOpen((v) => !v)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => e.key === 'Enter' && setOpen((v) => !v)}
+      >
+        <ChevronRightIcon
+          className={open ? styles.chevronOpen : styles.chevron}
+          fontSize={14}
+        />
         {running ? (
-          <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" />
+          <Spinner size="tiny" />
         ) : (
-          <CircleCheck className="h-3.5 w-3.5 shrink-0 text-[#89d185]" />
+          <CheckmarkCircleIcon
+            fontSize={14}
+            style={{ color: 'var(--vscode-chat-success)' }}
+          />
         )}
         <span>{label}</span>
         {hasReasoning && n > 0 && (
-          <span className="text-[11px] text-muted-foreground/70">· 含思考</span>
+          <span style={{ fontSize: '11px', opacity: 0.7 }}>· 含思考</span>
         )}
-      </summary>
-      <div className="mt-1.5 ml-[7px] border-l border-border pl-3">
-        {parts.map((p, i) => (
-          <TimelineRow key={i} part={p} />
-        ))}
       </div>
-    </details>
+      {open && (
+        <div className={styles.body}>
+          {parts.map((p, i) => (
+            <TimelineRow key={i} part={p} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
-/**
- * 助手消息：把 思考 + 工具调用 折叠成 "Finished with x steps" 时间轴，
- * 文本段落（含最终回答）在时间轴外以 markdown 渲染。
- * 数据来自消息级 context（core 的 MessageByIndexProvider 在本组件外层建立）。
- */
-function CustomAssistantMessage() {
-  const parts = useAssistantState(useShallow((s) => s.message.parts)) as Part[];
-  const status = useAssistantState((s) => s.message.status);
-  const running = status?.type === 'running';
+// ============================================================================
+// = markdown                                                                  =
+// ============================================================================
 
+/** 代码块：react-syntax-highlighter + VS Code 主题色表 */
+function CodeBlock({ language, code }: { language: string; code: string }) {
+  const theme = useDemoStore((s) => s.theme);
+  const style =
+    theme && (theme.uiTheme === 'light' || theme.uiTheme === 'hcLight')
+      ? oneLight
+      : vscDarkPlus;
+  return (
+    <SyntaxHighlighter
+      language={language || 'text'}
+      style={style}
+      customStyle={{
+        margin: 0,
+        background: 'var(--vscode-chat-code-bg)',
+        borderRadius: 'var(--vscode-radius-md)',
+        border: '1px solid var(--vscode-border)',
+        padding: '12px 14px',
+        fontSize: '12.5px',
+        fontFamily: 'var(--vscode-font-mono)',
+      }}
+      codeTagProps={{
+        style: { fontFamily: 'var(--vscode-font-mono)' },
+      }}
+    >
+      {code}
+    </SyntaxHighlighter>
+  );
+}
+
+/** markdown 渲染（GFM + 代码高亮 + 行内代码芯片） */
+function Markdown({ text }: { text: string }) {
+  return (
+    <div className="md-body">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code({ className, children, ...props }) {
+            const match = /language-(\w+)/.exec(className || '');
+            const isBlock = String(children).includes('\n');
+            if (match && isBlock) {
+              return (
+                <CodeBlock
+                  language={match[1]}
+                  code={String(children).replace(/\n$/, '')}
+                />
+              );
+            }
+            return (
+              <code className="md-inline-code" {...props}>
+                {children}
+              </code>
+            );
+          },
+          pre({ children }) {
+            return <>{children}</>;
+          },
+          a({ children, ...props }) {
+            return (
+              <a
+                {...props}
+                style={{ color: 'var(--vscode-chat-link)' }}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {children}
+              </a>
+            );
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+// ============================================================================
+// = 消息                                                                      =
+// ============================================================================
+
+const msgStyles = makeStyles({
+  userRow: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    marginBottom: '5px',
+    marginTop: '12px',
+  },
+  userBubble: {
+    maxWidth: '90%',
+    width: 'fit-content',
+    padding: '8px 12px',
+    borderRadius: 'var(--vscode-radius-xl)',
+    backgroundColor: 'var(--vscode-chat-bubble)',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    fontSize: '13px',
+    lineHeight: '1.5',
+  },
+  asstRow: {
+    marginTop: '12px',
+    minWidth: 0,
+  },
+  thinking: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '4px 0',
+    fontSize: '13px',
+    color: 'var(--vscode-muted-fg)',
+  },
+});
+
+/** 助手消息：思考 + 工具调用折叠成 "Finished with x steps"，文本段 markdown 渲染 */
+function AssistantMessage({
+  message,
+  running,
+}: {
+  message: Extract<Message, { role: 'assistant' }>;
+  running: boolean;
+}) {
+  const styles = msgStyles();
   const nodes = useMemo(() => {
-    const out: Array<{ kind: 'group'; parts: Part[] } | { kind: 'text'; index: number }> = [];
+    const out: Array<
+      { kind: 'group'; parts: Part[] } | { kind: 'text'; index: number }
+    > = [];
     let group: Part[] = [];
     const flush = () => {
       if (group.length) {
@@ -201,91 +361,348 @@ function CustomAssistantMessage() {
         group = [];
       }
     };
-    parts.forEach((p, i) => {
-      if (isProcessPart(p)) {
+    message.parts.forEach((p, i) => {
+      if (p.type === 'reasoning' || p.type === 'tool-call') {
         group.push(p);
-      } else if (p.type === 'text' && (p.text ?? '').trim()) {
+      } else if (p.type === 'text' && p.text.trim()) {
         flush();
         out.push({ kind: 'text', index: i });
       }
     });
     flush();
     return out;
-  }, [parts]);
+  }, [message.parts]);
 
-  // 只有消息末尾的步骤组才是"活跃"的；前面的组（模型已走完）一律显示 Finished
   const lastGroupIdx = nodes.map((n) => n.kind).lastIndexOf('group');
 
+  if (nodes.length === 0) {
+    return (
+      <div className={styles.asstRow}>
+        <div className={styles.thinking}>
+          <Spinner size="tiny" /> 思考中…
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <DefaultAssistantMessage.Root>
-      <DefaultAssistantMessage.Avatar />
-      <div className="min-w-0 flex-1">
-        {nodes.length === 0 ? (
-          <div className="flex items-center gap-1.5 py-1 text-[13px] text-muted-foreground">
-            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            思考中…
-          </div>
+    <div className={styles.asstRow}>
+      {nodes.map((n, i) =>
+        n.kind === 'group' ? (
+          <StepsGroup
+            key={`g${i}`}
+            parts={n.parts}
+            running={running && i === lastGroupIdx}
+          />
         ) : (
-          nodes.map((n, i) =>
-            n.kind === 'group' ? (
-              <StepsGroup
-                key={`g${i}`}
-                parts={n.parts}
-                running={running && i === lastGroupIdx}
-              />
+          <div key={`t${n.index}`}>
+            <Markdown
+              text={
+                message.parts[n.index].type === 'text'
+                  ? message.parts[n.index].text
+                  : ''
+              }
+            />
+          </div>
+        ),
+      )}
+    </div>
+  );
+}
+
+const emptyStyles = makeStyles({
+  wrap: {
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '14px',
+    padding: '24px',
+    textAlign: 'center',
+  },
+  icon: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '56px',
+    height: '56px',
+    borderRadius: '50%',
+    backgroundColor: 'var(--vscode-muted)',
+    color: 'var(--vscode-primary)',
+  },
+  title: {
+    fontSize: '15px',
+    fontWeight: 600,
+    color: 'var(--vscode-foreground)',
+  },
+  sub: {
+    fontSize: '13px',
+    color: 'var(--vscode-muted-fg)',
+    maxWidth: '280px',
+    lineHeight: 1.5,
+  },
+});
+
+/** 空状态：居中图标 + 引导文案（模仿移动端"开始对话"） */
+function EmptyState({ hasSession }: { hasSession: boolean }) {
+  const styles = emptyStyles();
+  return (
+    <div className={styles.wrap}>
+      <div className={styles.icon}>
+        <ChatIcon fontSize={28} />
+      </div>
+      <div className={styles.title}>
+        {hasSession ? '此会话暂无消息' : '开始一段对话'}
+      </div>
+      <div className={styles.sub}>
+        {hasSession
+          ? '点击下方刷新重试，或发送一条消息'
+          : '从左侧选择一个会话，或直接输入消息发送到 VS Code'}
+      </div>
+    </div>
+  );
+}
+
+function MessageList({
+  messages,
+  running,
+  hasSession,
+}: {
+  messages: Message[];
+  running: boolean;
+  hasSession: boolean;
+}) {
+  const styles = msgStyles();
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages.length]);
+
+  return (
+    <div className="flex-1 overflow-y-auto" style={{ padding: '16px 16px 8px' }}>
+      {messages.length === 0 ? (
+        <EmptyState hasSession={hasSession} />
+      ) : (
+        <div style={{ maxWidth: '720px', margin: '0 auto' }}>
+          {messages.map((m) =>
+            m.role === 'user' ? (
+              <div key={m.id} className={styles.userRow}>
+                <div className={styles.userBubble}>{m.text}</div>
+              </div>
             ) : (
-              // 文本段落在 PartByIndexProvider 内渲染，MarkdownText 才能从 part context 读到 text
-              <MessagePrimitive.PartByIndex
-                key={`t${n.index}`}
-                index={n.index}
-                components={{ Text: MarkdownText }}
+              <AssistantMessage
+                key={m.id}
+                message={m}
+                running={running && m.id === messages[messages.length - 1]?.id}
               />
             ),
-          )
-        )}
-      </div>
-      <BranchPicker />
-      <AssistantActionBar />
-    </DefaultAssistantMessage.Root>
+          )}
+          <div ref={bottomRef} />
+        </div>
+      )}
+    </div>
   );
 }
 
-function Runtime({ children }: { children: React.ReactNode }) {
-  const version = useDemoStore((s) => s.version);
+// ============================================================================
+// = 输入框（写路径）                                                          =
+// ============================================================================
+
+const inputStyles = makeStyles({
+  footer: {
+    padding: '8px 12px calc(12px + env(safe-area-inset-bottom))',
+  },
+  box: {
+    display: 'flex',
+    alignItems: 'flex-end',
+    gap: '8px',
+    width: '100%',
+    maxWidth: '720px',
+    margin: '0 auto',
+    backgroundColor: 'var(--vscode-input)',
+    border: '1px solid var(--vscode-border)',
+    borderRadius: '24px',
+    padding: '6px 6px 6px 16px',
+    transition: 'border-color 0.15s',
+  },
+  textarea: {
+    flex: 1,
+    resize: 'none',
+    border: 'none',
+    outline: 'none',
+    backgroundColor: 'transparent',
+    color: 'var(--vscode-foreground)',
+    padding: '9px 0',
+    fontSize: '14px',
+    lineHeight: 1.4,
+    fontFamily: 'var(--vscode-font-family)',
+    minHeight: '20px',
+    maxHeight: '140px',
+  },
+  send: {
+    flexShrink: 0,
+    width: '34px',
+    height: '34px',
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    border: 'none',
+    cursor: 'pointer',
+    backgroundColor: 'var(--vscode-primary)',
+    color: 'var(--vscode-primary-fg)',
+    transition: 'opacity 0.15s, transform 0.1s',
+  },
+  sendDisabled: {
+    opacity: 0.4,
+    cursor: 'default',
+  },
+  hint: {
+    maxWidth: '720px',
+    margin: '6px auto 0',
+    fontSize: '11px',
+    color: 'var(--vscode-muted-fg)',
+    textAlign: 'center',
+  },
+});
+
+function InputFooter() {
+  const styles = inputStyles();
+  const [value, setValue] = useState('');
+  const sending = useDemoStore((s) => s.sending);
+  const connected = useDemoStore((s) => s.connected);
   const activeSessionId = useDemoStore((s) => s.activeSessionId);
 
-  const messages = useMemo<ThreadMessageLike[]>(() => {
-    void version;
-    const s = useDemoStore.getState();
-    const sess = activeSessionId ? s.sessions.get(activeSessionId) : undefined;
-    if (!sess) return [];
-    return sessionToMessages(sess.order, sess.requests);
-  }, [version, activeSessionId]);
-
-  const isRunning = useMemo(() => {
-    void version;
-    const s = useDemoStore.getState();
-    const sess = s.activeSessionId ? s.sessions.get(s.activeSessionId) : undefined;
-    if (!sess) return false;
-    return sess.order.some((id) => !sess.requests.get(id)?.done);
-  }, [version, activeSessionId]);
-
-  const runtime = useExternalStoreRuntime({
-    isRunning,
-    messages,
-    // messages 已是 ThreadMessageLike，恒等转换（0.11 要求非 ThreadMessage 时提供 convertMessage）
-    convertMessage: (m: ThreadMessageLike) => m,
-    onNew: async () => {
-      // 只读：忽略发送
-    },
-  });
+  const canSend = !!value.trim() && !sending && connected && !!activeSessionId;
+  const submit = () => {
+    const text = value.trim();
+    if (!text || sending || !connected || !activeSessionId) return;
+    sendMessage(text);
+    setValue('');
+  };
 
   return (
-    <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
+    <div className={styles.footer}>
+      <div className={styles.box}>
+        <textarea
+          className={styles.textarea}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          placeholder={
+            activeSessionId ? '询问 Copilot…' : '选择会话后可发送'
+          }
+          disabled={!activeSessionId}
+          rows={1}
+        />
+        <button
+          className={canSend ? styles.send : `${styles.send} ${styles.sendDisabled}`}
+          onClick={submit}
+          disabled={!canSend}
+          aria-label="发送"
+        >
+          {sending ? <Spinner size="tiny" /> : <SendIcon fontSize={16} />}
+        </button>
+      </div>
+      {sending && (
+        <div className={styles.hint}>
+          正在注入 VS Code（激活窗口 → 切换会话 → 粘贴发送）…
+        </div>
+      )}
+    </div>
   );
 }
 
-/** 会话项：标题（无则 sessionId 前缀）+ 模型 */
+// ============================================================================
+// = 侧边栏                                                                    =
+// ============================================================================
+
+const sidebarStyles = makeStyles({
+  panel: {
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100%',
+    backgroundColor: 'var(--vscode-card)',
+  },
+  panelHead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '14px 16px 10px',
+  },
+  panelTitle: {
+    flex: 1,
+    fontSize: '15px',
+    fontWeight: 600,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  closeBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '32px',
+    height: '32px',
+    borderRadius: '50%',
+    border: 'none',
+    background: 'var(--vscode-muted)',
+    color: 'var(--vscode-foreground)',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  groupHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    width: '100%',
+    padding: '6px 10px',
+    borderRadius: '8px',
+    fontSize: '11px',
+    fontWeight: 600,
+    letterSpacing: '0.03em',
+    color: 'var(--vscode-muted-fg)',
+    cursor: 'pointer',
+    background: 'transparent',
+    border: 0,
+    textAlign: 'left',
+  },
+  item: {
+    display: 'block',
+    width: '100%',
+    padding: '8px 10px',
+    borderRadius: '10px',
+    fontSize: '14px',
+    textAlign: 'left',
+    cursor: 'pointer',
+    border: 0,
+    background: 'transparent',
+    color: 'var(--vscode-foreground)',
+    opacity: 0.85,
+    transition: 'background-color 0.12s',
+  },
+  itemActive: {
+    backgroundColor: 'var(--vscode-muted)',
+    opacity: 1,
+  },
+  model: {
+    display: 'block',
+    marginTop: '2px',
+    fontSize: '11px',
+    color: 'var(--vscode-muted-fg)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+});
+
 function SessionItem({
   sess,
   active,
@@ -295,37 +712,41 @@ function SessionItem({
   active: boolean;
   onSelect: () => void;
 }) {
+  const styles = sidebarStyles();
   const label = sess.title || sess.sessionId.slice(0, 8);
   return (
     <button
+      className={active ? `${styles.item} ${styles.itemActive}` : styles.item}
       onClick={onSelect}
-      className={
-        'w-full truncate rounded px-2 py-1.5 text-left text-[13px] ' +
-        (active
-          ? 'bg-secondary text-foreground'
-          : 'text-foreground/80 hover:bg-secondary/60')
-      }
       title={sess.title ?? sess.sessionId}
     >
-      <span className="block truncate">{label}</span>
-      {sess.model && (
-        <span className="block truncate text-[11px] text-muted-foreground">
-          {sess.model}
-        </span>
-      )}
+      <span
+        style={{
+          display: 'block',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {label}
+      </span>
+      {sess.model && <span className={styles.model}>{sess.model}</span>}
     </button>
   );
 }
 
-/** 侧边栏：按项目分组，每组可折叠，组内会话按最近活跃排序 */
 function Sidebar({
   sessions,
   activeSessionId,
+  onPick,
+  onClose,
 }: {
   sessions: SessionState[];
   activeSessionId: string | null;
+  onPick: (id: string) => void;
+  onClose: () => void;
 }) {
-  // 默认全展开；折叠状态按项目 key 记录
+  const styles = sidebarStyles();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const groups = useMemo(() => {
@@ -336,7 +757,6 @@ function Sidebar({
       if (arr) arr.push(s);
       else byProject.set(key, [s]);
     }
-    // 组按组内最近活跃排序，组内会话按最近活跃排序
     return [...byProject.entries()]
       .map(([project, list]) => ({
         project,
@@ -355,43 +775,81 @@ function Sidebar({
     });
   };
 
+  const header = (
+    <div className={styles.panelHead}>
+      <span className={styles.panelTitle}>会话</span>
+      <button className={styles.closeBtn} onClick={onClose} aria-label="关闭">
+        <DismissIcon fontSize={16} />
+      </button>
+    </div>
+  );
+
   if (groups.length === 0) {
     return (
-      <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-        暂无会话
+      <div className={styles.panel}>
+        {header}
+        <div
+          style={{
+            padding: '16px 12px',
+            textAlign: 'center',
+            fontSize: '12px',
+            color: 'var(--vscode-muted-fg)',
+          }}
+        >
+          暂无会话
+        </div>
       </div>
     );
   }
 
   return (
-    <nav className="flex-1 overflow-y-auto px-2 py-2">
+    <div className={styles.panel}>
+      {header}
+      <nav className="flex-1 overflow-y-auto" style={{ padding: '8px' }}>
       {groups.map((g) => {
         const isCollapsed = collapsed.has(g.project);
         return (
-          <div key={g.project} className="mb-1">
+          <div key={g.project} style={{ marginBottom: '4px' }}>
             <button
+              className={styles.groupHeader}
               onClick={() => toggle(g.project)}
-              className="flex w-full items-center gap-1 rounded px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground"
             >
-              <ChevronRight
-                className={
-                  'h-3.5 w-3.5 shrink-0 transition-transform ' +
-                  (isCollapsed ? '' : 'rotate-90')
-                }
+              <ChevronRightIcon
+                fontSize={14}
+                style={{
+                  transform: isCollapsed ? 'rotate(0)' : 'rotate(90deg)',
+                  transition: 'transform 0.15s',
+                }}
               />
-              <span className="truncate">{g.project}</span>
-              <span className="ml-auto text-[10px] text-muted-foreground/70">
+              <span
+                style={{
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {g.project}
+              </span>
+              <span style={{ marginLeft: 'auto', fontSize: '10px', opacity: 0.7 }}>
                 {g.list.length}
               </span>
             </button>
             {!isCollapsed && (
-              <div className="mt-0.5 space-y-0.5 pl-1">
+              <div
+                style={{
+                  marginTop: '2px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '2px',
+                  paddingLeft: '4px',
+                }}
+              >
                 {g.list.map((s) => (
                   <SessionItem
                     key={s.sessionId}
                     sess={s}
                     active={s.sessionId === activeSessionId}
-                    onSelect={() => selectSession(s.sessionId)}
+                    onSelect={() => onPick(s.sessionId)}
                   />
                 ))}
               </div>
@@ -399,15 +857,109 @@ function Sidebar({
           </div>
         );
       })}
-    </nav>
+      </nav>
+    </div>
   );
 }
 
+// ============================================================================
+// = 根组件                                                                    =
+// ============================================================================
+
+const appStyles = makeStyles({
+  root: {
+    position: 'relative',
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100%',
+    overflow: 'hidden',
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '10px 12px calc(8px + env(safe-area-inset-top))',
+    borderBottom: '1px solid var(--vscode-border)',
+    backgroundColor: 'var(--vscode-card)',
+  },
+  iconBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '36px',
+    height: '36px',
+    borderRadius: '50%',
+    border: 'none',
+    backgroundColor: 'var(--vscode-muted)',
+    color: 'var(--vscode-foreground)',
+    cursor: 'pointer',
+    flexShrink: 0,
+    transition: 'background-color 0.12s',
+  },
+  title: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: '15px',
+    fontWeight: 600,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  error: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    borderBottom: '1px solid var(--vscode-tk-errorForeground, #f48771)',
+    backgroundColor: 'var(--vscode-tk-inputValidation-errorBackground, #3a1d1d)',
+    color: 'var(--vscode-tk-inputValidation-errorForeground, #f48771)',
+    padding: '8px 12px',
+    fontSize: '12px',
+  },
+  main: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    minHeight: 0,
+  },
+  // 抽屉遮罩（默认透明不可点，打开时淡入）
+  scrim: {
+    position: 'absolute',
+    inset: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    opacity: 0,
+    pointerEvents: 'none',
+    transition: 'opacity 0.2s',
+    zIndex: 30,
+  },
+  scrimOpen: {
+    opacity: 1,
+    pointerEvents: 'auto',
+  },
+  // 左侧抽屉（默认移出屏幕，打开时滑入）
+  drawer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    bottom: 0,
+    width: 'min(85vw, 320px)',
+    transform: 'translateX(-100%)',
+    transition: 'transform 0.22s ease',
+    zIndex: 40,
+    boxShadow: '2px 0 16px rgba(0, 0, 0, 0.4)',
+  },
+  drawerOpen: {
+    transform: 'translateX(0)',
+  },
+});
+
 export default function App() {
+  const appStyles_ = appStyles();
+  const baseTheme = useFluentBaseTheme();
   const connected = useDemoStore((s) => s.connected);
   const version = useDemoStore((s) => s.version);
   const activeSessionId = useDemoStore((s) => s.activeSessionId);
   const error = useDemoStore((s) => s.error);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     startConnection();
@@ -420,45 +972,103 @@ export default function App() {
     );
   }, [version]);
 
+  const { messages, running, activeTitle } = useMemo(() => {
+    void version;
+    const s = useDemoStore.getState();
+    const sess = activeSessionId ? s.sessions.get(activeSessionId) : undefined;
+    if (!sess)
+      return { messages: [] as Message[], running: false, activeTitle: '' };
+    const msgs = sessionToMessages(sess.order, sess.requests);
+    const isRunning = sess.order.some((id) => !sess.requests.get(id)?.done);
+    return {
+      messages: msgs,
+      running: isRunning,
+      activeTitle: sess.title || sess.sessionId.slice(0, 8),
+    };
+  }, [version, activeSessionId]);
+
+  // 选中会话后自动收起抽屉（移动端习惯）
+  const handleSelect = (id: string) => {
+    selectSession(id);
+    setDrawerOpen(false);
+  };
+
   return (
-    <div className="flex h-full flex-col">
-      <header className="flex items-center gap-2 border-b border-border bg-card px-3 py-2">
-        <h1 className="flex-1 truncate text-sm font-semibold">Copilot Bridge Demo</h1>
-        <span className={connected ? 'text-[#89d185] text-xs' : 'text-muted-foreground text-xs'}>
-          {connected ? '已连接' : '连接中…'}
-        </span>
-      </header>
-      {error && (
-        <div className="border-b border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">
-          {error}
+    <FluentProvider theme={baseTheme} style={{ height: '100%' }}>
+      <div className={appStyles_.root}>
+        <header className={appStyles_.header}>
+          <button
+            className={appStyles_.iconBtn}
+            onClick={() => setDrawerOpen(true)}
+            aria-label="打开会话列表"
+          >
+            <MenuIcon fontSize={18} />
+          </button>
+          <h1 className={appStyles_.title}>
+            {activeTitle || (connected ? 'Copilot Bridge' : '连接中…')}
+          </h1>
+          <button
+            className={appStyles_.iconBtn}
+            onClick={() => refreshActive()}
+            disabled={!activeSessionId}
+            style={activeSessionId ? undefined : { opacity: 0.4 }}
+            aria-label="刷新"
+          >
+            <RefreshIcon fontSize={17} />
+          </button>
+        </header>
+        {error && (
+          <div className={appStyles_.error}>
+            <span style={{ flex: 1 }}>{error}</span>
+            <button
+              onClick={() => useDemoStore.setState({ error: null })}
+              style={{
+                background: 'transparent',
+                border: 0,
+                cursor: 'pointer',
+                color: 'inherit',
+                padding: '2px',
+              }}
+              aria-label="关闭"
+            >
+              <DismissIcon fontSize={14} />
+            </button>
+          </div>
+        )}
+        <div className={appStyles_.main}>
+          <MessageList
+            messages={messages}
+            running={running}
+            hasSession={!!activeSessionId}
+          />
+          <InputFooter />
         </div>
-      )}
-      <div className="flex min-h-0 flex-1">
-        <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-card">
-          <Sidebar sessions={sessions} activeSessionId={activeSessionId} />
-        </aside>
-        <div className="min-h-0 flex-1">
-          <Runtime>
-            <Thread
-              assistantMessage={{
-                allowReload: false,
-                allowCopy: true,
-                allowSpeak: false,
-                allowFeedbackPositive: false,
-                allowFeedbackNegative: false,
-              }}
-              userMessage={{ allowEdit: false }}
-              branchPicker={{ allowBranchPicker: false }}
-              components={{
-                Composer: () => null,
-                MessagesFooter: ReadOnlyFooter,
-                UserMessage: MarkdownUserMessage,
-                AssistantMessage: CustomAssistantMessage,
-              }}
-            />
-          </Runtime>
+
+        {/* 抽屉遮罩 */}
+        <div
+          className={
+            drawerOpen
+              ? `${appStyles_.scrim} ${appStyles_.scrimOpen}`
+              : appStyles_.scrim
+          }
+          onClick={() => setDrawerOpen(false)}
+        />
+        {/* 会话抽屉 */}
+        <div
+          className={
+            drawerOpen
+              ? `${appStyles_.drawer} ${appStyles_.drawerOpen}`
+              : appStyles_.drawer
+          }
+        >
+          <Sidebar
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            onPick={handleSelect}
+            onClose={() => setDrawerOpen(false)}
+          />
         </div>
       </div>
-    </div>
+    </FluentProvider>
   );
 }

@@ -2,74 +2,139 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * 主题变量体系：
+ * - 原始变量 --vscode-<token>（如 --vscode-editor.background）由 /api/theme 运行时
+ *   注入到 :root，值随 VS Code 活动主题变化。
+ * - 派生语义变量（--vscode-background / --vscode-chat-bubble 等）引用原始变量，
+ *   并带 Dark 2026 兜底色：bridge 不可达或 fetch 未完成时页面仍有可读深色外观。
+ * Tailwind 颜色、自定义元素、代码高亮全部消费派生变量。
+ */
+:root {
+  /* 字体（VS Code 默认） */
+  --vscode-font-family: 'Segoe UI', 'Segoe UI Variable', system-ui, -apple-system,
+    sans-serif;
+  --vscode-font-mono: 'Cascadia Code', 'Cascadia Mono', Consolas, 'Courier New',
+    monospace;
+
+  /* 圆角刻度（Fluent cornerRadius：medium 4 / large 8 / xLarge 12） */
+  --vscode-radius-md: 4px;
+  --vscode-radius-lg: 8px;
+  --vscode-radius-xl: 12px;
+
+  /*
+   * 派生语义变量：引用运行时注入的原始 token 变量（--vscode-tk-*，由
+   * /api/theme 注入，token 名 `.` 已转 `-`），带 Dark 2026 兜底色。
+   * bridge 不可达或 fetch 未完成时页面仍有可读深色外观。
+   */
+  --vscode-background: var(--vscode-tk-editor-background, #121314);
+  --vscode-foreground: var(--vscode-tk-foreground, #bfbfbf);
+  --vscode-card: var(--vscode-tk-sideBar-background, #191a1b);
+  --vscode-border: var(--vscode-tk-sideBar-border, #2a2b2c);
+  --vscode-input: var(--vscode-tk-input-background, #191a1b);
+  --vscode-muted: #ffffff14;
+  --vscode-muted-fg: var(--vscode-tk-descriptionForeground, #8c8c8c);
+  --vscode-primary: var(--vscode-tk-button-background, #297aa0);
+  --vscode-primary-fg: var(--vscode-tk-button-foreground, #ffffff);
+  --vscode-secondary: var(--vscode-tk-editorWidget-background, #202122);
+  --vscode-ring: var(--vscode-tk-focusBorder, #3994bcb3);
+
+  /* 聊天面板专属（Copilot 观感核心） */
+  --vscode-chat-bubble: var(--vscode-tk-chat-requestBubbleBackground, #ffffff13);
+  --vscode-chat-bubble-hover: var(
+    --vscode-tk-chat-requestBubbleHoverBackground,
+    #ffffff22
+  );
+  --vscode-chat-request-bg: var(--vscode-tk-chat-requestBackground, #ffffff08);
+  --vscode-chat-code-bg: var(--vscode-tk-textCodeBlock-background, #242526);
+  --vscode-chat-link: var(--vscode-tk-textLink-foreground, #48a0c7);
+  --vscode-chat-success: var(--vscode-tk-chat-linesAddedForeground, #54b054);
+}
+
 html,
 body,
 #root {
   height: 100%;
 }
 body {
-  background: #1e1e1e;
-  color: #d4d4d4;
+  background: var(--vscode-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
 }
 
-/*
- * react-ui 的 default-theme 组件默认输出一套浅色 --aui-* 变量，
- * 与本页深色主题冲突（行内代码/用户气泡会渲染成近白"芯片"）。
- * 这里统一覆盖为深色主题（与 tailwind.config.js 的 colors 一致）。
- * 变量格式为 HSL 三元组，组件内以 hsl(var(--aui-x)) 使用。
- */
-:root {
-  --aui-background: 0 0% 11.8%; /* #1e1e1e */
-  --aui-foreground: 0 0% 83.1%; /* #d4d4d4 */
-  --aui-card: 0 0% 14.5%; /* #252526 */
-  --aui-card-foreground: 0 0% 83.1%;
-  --aui-popover: 0 0% 14.5%;
-  --aui-popover-foreground: 0 0% 83.1%;
-  --aui-primary: 206 84% 33%; /* #0e639c */
-  --aui-primary-foreground: 0 0% 100%;
-  --aui-secondary: 0 0% 17.6%; /* #2d2d30 */
-  --aui-secondary-foreground: 0 0% 83.1%;
-  --aui-muted: 0 0% 17.6%; /* #2d2d30 */
-  --aui-muted-foreground: 0 0% 54.1%; /* #8a8a8a */
-  --aui-accent: 211 47% 31.8%; /* #264f78 */
-  --aui-accent-foreground: 0 0% 100%;
-  --aui-destructive: 0 86% 61%; /* #f14c4c */
-  --aui-destructive-foreground: 0 0% 100%;
-  --aui-border: 0 0% 23.5%; /* #3c3c3c */
-  --aui-input: 0 0% 23.5%;
-  --aui-ring: 173 54% 48%; /* #4ec9b0 */
-}
-
-/* 行内代码：去掉默认的近白背景 + 1px 边框 + 粗体"芯片"观感，改为柔和深色（无边框） */
-.aui-md-inline-code {
-  background-color: #2a2a2a;
+/* markdown 行内代码：柔和深色芯片（无边框，贴近 Copilot 观感） */
+.md-inline-code {
+  background-color: var(--vscode-chat-code-bg);
   border: 0;
   border-radius: 4px;
   padding: 0.05em 0.35em;
   font-weight: 500;
-  color: #e2e2e2;
+  font-family: var(--vscode-font-mono);
+  font-size: 0.92em;
+  color: var(--vscode-foreground);
 }
 
-/* 代码块：react-ui 默认未给 pre/code 深色背景，补上以防白底 */
-.aui-md-pre {
-  background-color: #1a1a1a;
-  border: 1px solid hsl(var(--aui-border));
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
-  overflow-x: auto;
+/* markdown 正文排版（Copilot 面板观感：13px / 1.5 行高 / 段间距） */
+.md-body {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--vscode-foreground);
+  word-break: break-word;
 }
-.aui-md-pre code {
-  background: transparent;
-  border: 0;
-  padding: 0;
-  font-weight: 400;
+.md-body > *:first-child {
+  margin-top: 0;
 }
-
-/* 用户气泡：深色填充，避免近白胶囊在深色页面上突兀 */
-.aui-user-message-content {
-  background-color: #2d2d30;
-  border: 0;
-  color: #d4d4d4;
+.md-body > *:last-child {
+  margin-bottom: 0;
+}
+.md-body p {
+  margin: 0 0 8px;
+}
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+  margin: 12px 0 6px;
+  font-weight: 600;
+}
+.md-body h1 {
+  font-size: 1.23em;
+}
+.md-body h2 {
+  font-size: 1.08em;
+}
+.md-body h3 {
+  font-size: 1em;
+}
+.md-body ul,
+.md-body ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+.md-body li {
+  margin: 2px 0;
+}
+.md-body table {
+  border-collapse: collapse;
+  margin: 0 0 8px;
+  font-size: 0.95em;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid var(--vscode-border);
+  padding: 4px 8px;
+}
+.md-body th {
+  background: var(--vscode-chat-code-bg);
+  font-weight: 600;
+}
+.md-body blockquote {
+  margin: 0 0 8px;
+  padding: 2px 12px;
+  border-left: 3px solid var(--vscode-border);
+  color: var(--vscode-muted-fg);
 }
 
 /*
