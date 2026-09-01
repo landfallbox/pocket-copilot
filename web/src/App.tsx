@@ -751,6 +751,7 @@ function Sidebar({
   const [showCount, setShowCount] = useState(PAGE);
   useDemoStore((s) => s.version);
 
+
   // 当前会话所属项目（侧边栏高亮用）
   const activeProject = useMemo(
     () =>
@@ -1149,6 +1150,7 @@ export default function App() {
           }
         >
           <Sidebar
+            key={String(drawerOpen)}
             sessions={sessions}
             activeSessionId={activeSessionId}
             onPick={handleSelect}
