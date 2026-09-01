@@ -624,31 +624,14 @@ const sidebarStyles = makeStyles({
     backgroundColor: 'var(--vscode-card)',
   },
   panelHead: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
     padding: '14px 16px 10px',
   },
   panelTitle: {
-    flex: 1,
     fontSize: '15px',
     fontWeight: 600,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-  },
-  closeBtn: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '32px',
-    height: '32px',
-    borderRadius: '50%',
-    border: 'none',
-    background: 'var(--vscode-muted)',
-    color: 'var(--vscode-foreground)',
-    cursor: 'pointer',
-    flexShrink: 0,
   },
   // 项目导航行（侧边栏只列项目，会话切换交给标题下拉）
   projectRow: {
@@ -739,12 +722,10 @@ function Sidebar({
   sessions,
   activeSessionId,
   onPick,
-  onClose,
 }: {
   sessions: SessionState[];
   activeSessionId: string | null;
   onPick: (id: string) => void;
-  onClose: () => void;
 }) {
   const styles = sidebarStyles();
   const PAGE = 6;
@@ -787,9 +768,6 @@ function Sidebar({
   const header = (
     <div className={styles.panelHead}>
       <span className={styles.panelTitle}>会话</span>
-      <button className={styles.closeBtn} onClick={onClose} aria-label="关闭">
-        <DismissIcon fontSize={16} />
-      </button>
     </div>
   );
 
@@ -1154,7 +1132,6 @@ export default function App() {
             sessions={sessions}
             activeSessionId={activeSessionId}
             onPick={handleSelect}
-            onClose={() => setDrawerOpen(false)}
           />
         </div>
       </div>
