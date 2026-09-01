@@ -21,7 +21,7 @@
   --vscode-radius-xl: 12px;
 
   /* 派生语义变量：内置 Dark 2026 色值（恒定深色，不随 VS Code 主题变化） */
-  --vscode-background: #000000;
+  --vscode-background: #121314;
   --vscode-foreground: #bfbfbf;
   --vscode-card: #191a1b;
   --vscode-border: #2a2b2c;
