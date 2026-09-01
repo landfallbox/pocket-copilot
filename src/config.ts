@@ -45,11 +45,12 @@ export const HEIMDALL_REQUESTS_DIR = path.join(HEIMDALL_DATA_DIR, 'requests');
 /** 记录源健康判定：超过该时长无新记录且存在运行中请求 → 标记异常 */
 export const RECORDER_STALE_MS = 5 * 60 * 1000;
 
-/** 静态前端目录（相对项目根） */
+/** 静态前端目录（web 前端构建产物，相对项目根） */
 export const WEB_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
   'web',
+  'dist',
 );
 
 /** VS Code 安装根（resources/app 所在），可用 VSCODE_APP_ROOT 覆盖 */

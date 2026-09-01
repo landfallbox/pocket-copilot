@@ -2,139 +2,166 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * 主题变量体系：
+ * - 原始变量 --vscode-<token>（如 --vscode-editor.background）由 /api/theme 运行时
+ *   注入到 :root，值随 VS Code 活动主题变化。
+ * - 派生语义变量（--vscode-background / --vscode-chat-bubble 等）引用原始变量，
+ *   并带 Dark 2026 兜底色：bridge 不可达或 fetch 未完成时页面仍有可读深色外观。
+ * Tailwind 颜色、自定义元素、代码高亮全部消费派生变量。
+ */
+:root {
+  /* 字体（VS Code 默认） */
+  --vscode-font-family: 'Segoe UI', 'Segoe UI Variable', system-ui, -apple-system,
+    sans-serif;
+  --vscode-font-mono: 'Cascadia Code', 'Cascadia Mono', Consolas, 'Courier New',
+    monospace;
+
+  /* 圆角刻度（Fluent cornerRadius：medium 4 / large 8 / xLarge 12） */
+  --vscode-radius-md: 4px;
+  --vscode-radius-lg: 8px;
+  --vscode-radius-xl: 12px;
+
+  /*
+   * 派生语义变量：引用运行时注入的原始 token 变量（--vscode-tk-*，由
+   * /api/theme 注入，token 名 `.` 已转 `-`），带 Dark 2026 兜底色。
+   * bridge 不可达或 fetch 未完成时页面仍有可读深色外观。
+   */
+  --vscode-background: var(--vscode-tk-editor-background, #121314);
+  --vscode-foreground: var(--vscode-tk-foreground, #bfbfbf);
+  --vscode-card: var(--vscode-tk-sideBar-background, #191a1b);
+  --vscode-border: var(--vscode-tk-sideBar-border, #2a2b2c);
+  --vscode-input: var(--vscode-tk-input-background, #191a1b);
+  --vscode-muted: #ffffff14;
+  --vscode-muted-fg: var(--vscode-tk-descriptionForeground, #8c8c8c);
+  --vscode-primary: var(--vscode-tk-button-background, #297aa0);
+  --vscode-primary-fg: var(--vscode-tk-button-foreground, #ffffff);
+  --vscode-secondary: var(--vscode-tk-editorWidget-background, #202122);
+  --vscode-ring: var(--vscode-tk-focusBorder, #3994bcb3);
+
+  /* 聊天面板专属（Copilot 观感核心） */
+  --vscode-chat-bubble: var(--vscode-tk-chat-requestBubbleBackground, #ffffff13);
+  --vscode-chat-bubble-hover: var(
+    --vscode-tk-chat-requestBubbleHoverBackground,
+    #ffffff22
+  );
+  --vscode-chat-request-bg: var(--vscode-tk-chat-requestBackground, #ffffff08);
+  --vscode-chat-code-bg: var(--vscode-tk-textCodeBlock-background, #242526);
+  --vscode-chat-link: var(--vscode-tk-textLink-foreground, #48a0c7);
+  --vscode-chat-success: var(--vscode-tk-chat-linesAddedForeground, #54b054);
+}
+
 html,
 body,
 #root {
   height: 100%;
 }
 body {
-  background: #1e1e1e;
-  color: #d4d4d4;
+  background: var(--vscode-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* ============================================================
-   markdown 正文（react-markdown 输出）
-   ============================================================ */
-.markdown-body {
-  word-break: break-word;
-}
-.markdown-body > *:first-child {
-  margin-top: 0;
-}
-.markdown-body > *:last-child {
-  margin-bottom: 0;
-}
-.markdown-body p {
-  margin: 0.4em 0;
-}
-.markdown-body h1,
-.markdown-body h2,
-.markdown-body h3,
-.markdown-body h4 {
-  margin: 0.8em 0 0.4em;
-  font-weight: 600;
-}
-.markdown-body h1 {
-  font-size: 1.25em;
-}
-.markdown-body h2 {
-  font-size: 1.15em;
-}
-.markdown-body h3 {
-  font-size: 1.05em;
-}
-.markdown-body ul,
-.markdown-body ol {
-  margin: 0.4em 0;
-  padding-left: 1.4em;
-}
-.markdown-body ul {
-  list-style: disc;
-}
-.markdown-body ol {
-  list-style: decimal;
-}
-.markdown-body ul ul {
-  list-style: circle;
-}
-/* 紧跟在段落后的列表视为该段落的子项（模型常用"编号小标题段落 + 列表"组织内容），缩进体现层级 */
-.markdown-body p + ul,
-.markdown-body p + ol {
-  margin-left: 1.4em;
-}
-.markdown-body li {
-  margin: 0.15em 0;
-}
-.markdown-body a {
-  color: #4ec9b0;
-  text-decoration: underline;
-}
-.markdown-body blockquote {
-  margin: 0.5em 0;
-  padding-left: 0.8em;
-  border-left: 3px solid #3c3c3c;
-  color: #8a8a8a;
-}
-.markdown-body table {
-  border-collapse: collapse;
-  margin: 0.5em 0;
-  display: block;
-  overflow-x: auto;
-  max-width: 100%;
-}
-.markdown-body th,
-.markdown-body td {
-  border: 1px solid #3c3c3c;
-  padding: 0.3em 0.6em;
-}
-.markdown-body th {
-  background: #2d2d30;
-}
-
-/* 行内代码：柔和深色（无边框芯片观感） */
-.markdown-body code {
-  background-color: #2a2a2a;
+/* markdown 行内代码：柔和深色芯片（无边框，贴近 Copilot 观感） */
+.md-inline-code {
+  background-color: var(--vscode-chat-code-bg);
+  border: 0;
   border-radius: 4px;
   padding: 0.05em 0.35em;
   font-weight: 500;
-  color: #e2e2e2;
-  font-size: 0.9em;
-}
-/* 代码块 */
-.markdown-body pre {
-  background-color: #1a1a1a;
-  border: 1px solid #3c3c3c;
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
-  overflow-x: auto;
-  margin: 0.5em 0;
-}
-.markdown-body pre code {
-  background: transparent;
-  border: 0;
-  padding: 0;
-  font-weight: 400;
-  color: #d4d4d4;
+  font-family: var(--vscode-font-mono);
+  font-size: 0.92em;
+  color: var(--vscode-foreground);
 }
 
-/* ============================================================
-   深色细滚动条
-   ============================================================ */
+/* markdown 正文排版（Copilot 面板观感：13px / 1.5 行高 / 段间距） */
+.md-body {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--vscode-foreground);
+  word-break: break-word;
+}
+.md-body > *:first-child {
+  margin-top: 0;
+}
+.md-body > *:last-child {
+  margin-bottom: 0;
+}
+.md-body p {
+  margin: 0 0 8px;
+}
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+  margin: 12px 0 6px;
+  font-weight: 600;
+}
+.md-body h1 {
+  font-size: 1.23em;
+}
+.md-body h2 {
+  font-size: 1.08em;
+}
+.md-body h3 {
+  font-size: 1em;
+}
+.md-body ul,
+.md-body ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+.md-body li {
+  margin: 2px 0;
+}
+.md-body table {
+  border-collapse: collapse;
+  margin: 0 0 8px;
+  font-size: 0.95em;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid var(--vscode-border);
+  padding: 4px 8px;
+}
+.md-body th {
+  background: var(--vscode-chat-code-bg);
+  font-weight: 600;
+}
+.md-body blockquote {
+  margin: 0 0 8px;
+  padding: 2px 12px;
+  border-left: 3px solid var(--vscode-border);
+  color: var(--vscode-muted-fg);
+}
+
+/*
+ * 深色细滚动条：浏览器默认滚动条是浅灰轨道，在深色主题里很突兀。
+ * 统一为透明轨道 + 深灰圆角滑块（代码块横条、消息列表、会话栏都生效）。
+ */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #3c3c3c transparent;
+  scrollbar-color: #4a4a4a transparent;
 }
 *::-webkit-scrollbar {
-  width: 8px;
+  width: 10px;
   height: 8px;
 }
 *::-webkit-scrollbar-track {
   background: transparent;
 }
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
 *::-webkit-scrollbar-thumb {
-  background: #3c3c3c;
-  border-radius: 4px;
+  background: #4a4a4a;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #4c4c4c;
+  background: #5a5a5a;
+  background-clip: content-box;
 }
