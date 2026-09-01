@@ -11,6 +11,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import {
   ChevronRightRegular as ChevronRightIcon,
+  ChevronDownRegular as ChevronDownIcon,
   DismissRegular as DismissIcon,
   SendRegular as SendIcon,
   CheckmarkCircleRegular as CheckmarkCircleIcon,
@@ -1079,14 +1080,66 @@ const appStyles = makeStyles({
     flexShrink: 0,
     transition: 'background-color 0.12s',
   },
-  title: {
+  titleWrap: {
+    position: 'relative',
     flex: 1,
     minWidth: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    maxWidth: '100%',
     fontSize: '15px',
     fontWeight: 600,
+    color: 'inherit',
+    background: 'transparent',
+    border: 0,
+    cursor: 'pointer',
+    padding: '4px 8px',
+    borderRadius: '8px',
+  },
+  titleText: {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+  },
+  titleMenu: {
+    position: 'absolute',
+    top: 'calc(100% + 6px)',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    minWidth: '220px',
+    maxWidth: 'min(320px, 80vw)',
+    maxHeight: '50vh',
+    overflowY: 'auto',
+    backgroundColor: 'var(--vscode-card)',
+    border: '1px solid var(--vscode-border)',
+    borderRadius: '10px',
+    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5)',
+    zIndex: 45,
+    padding: '4px',
+  },
+  titleMenuItem: {
+    display: 'block',
+    width: '100%',
+    padding: '8px 10px',
+    borderRadius: '8px',
+    fontSize: '14px',
+    textAlign: 'left',
+    cursor: 'pointer',
+    border: 0,
+    background: 'transparent',
+    color: 'var(--vscode-foreground)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  titleMenuItemActive: {
+    backgroundColor: 'var(--vscode-muted)',
   },
   error: {
     display: 'flex',
@@ -1143,6 +1196,7 @@ export default function App() {
   const activeSessionId = useDemoStore((s) => s.activeSessionId);
   const error = useDemoStore((s) => s.error);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [titleMenuOpen, setTitleMenuOpen] = useState(false);
 
   useEffect(() => {
     startConnection();
@@ -1176,6 +1230,26 @@ export default function App() {
     setDrawerOpen(false);
   };
 
+  // 当前会话所属项目 + 同项目会话列表（标题下拉切换用）
+  const activeProject = useMemo(() => {
+    if (!activeSessionId) return null;
+    return (
+      useDemoStore.getState().sessions.get(activeSessionId)?.project ?? null
+    );
+  }, [activeSessionId, version]);
+
+  const titleMenuList = useMemo(() => {
+    if (!activeProject) return [] as SessionState[];
+    return sessions
+      .filter((s) => s.project === activeProject)
+      .sort((a, b) => b.lastActivity - a.lastActivity);
+  }, [sessions, activeProject]);
+
+  const pickFromTitle = (id: string) => {
+    selectSession(id);
+    setTitleMenuOpen(false);
+  };
+
   return (
     <FluentProvider theme={baseTheme} style={{ height: '100%' }}>
       <div className={appStyles_.root}>
@@ -1187,9 +1261,45 @@ export default function App() {
           >
             <MenuIcon fontSize={18} />
           </button>
-          <h1 className={appStyles_.title}>
-            {activeTitle || (connected ? 'Copilot Bridge' : '连接中…')}
-          </h1>
+          <div className={appStyles_.titleWrap}>
+            <button
+              className={appStyles_.title}
+              onClick={() => setTitleMenuOpen((o) => !o)}
+              disabled={titleMenuList.length <= 1}
+              style={titleMenuList.length <= 1 ? { cursor: 'default' } : undefined}
+              aria-label="切换会话"
+              title={titleMenuList.length > 1 ? '切换同项目会话' : undefined}
+            >
+              <span className={appStyles_.titleText}>
+                {activeTitle || (connected ? 'Copilot Bridge' : '连接中…')}
+              </span>
+              {titleMenuList.length > 1 && <ChevronDownIcon fontSize={14} />}
+            </button>
+            {titleMenuOpen && titleMenuList.length > 1 && (
+              <div className={appStyles_.titleMenu}>
+                {titleMenuList.map((s) => (
+                  <button
+                    key={s.sessionId}
+                    className={
+                      s.sessionId === activeSessionId
+                        ? `${appStyles_.titleMenuItem} ${appStyles_.titleMenuItemActive}`
+                        : appStyles_.titleMenuItem
+                    }
+                    onClick={() => pickFromTitle(s.sessionId)}
+                  >
+                    {s.title || s.sessionId.slice(0, 8)}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {/* 点击外部关闭标题下拉 */}
+          {titleMenuOpen && (
+            <div
+              style={{ position: 'fixed', inset: 0, zIndex: 35 }}
+              onClick={() => setTitleMenuOpen(false)}
+            />
+          )}
           <button
             className={appStyles_.iconBtn}
             onClick={() => refreshActive()}
