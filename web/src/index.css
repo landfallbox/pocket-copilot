@@ -4,11 +4,9 @@
 
 /*
  * 主题变量体系：
- * - 原始变量 --vscode-<token>（如 --vscode-editor.background）由 /api/theme 运行时
- *   注入到 :root，值随 VS Code 活动主题变化。
- * - 派生语义变量（--vscode-background / --vscode-chat-bubble 等）引用原始变量，
- *   并带 Dark 2026 兜底色：bridge 不可达或 fetch 未完成时页面仍有可读深色外观。
- * Tailwind 颜色、自定义元素、代码高亮全部消费派生变量。
+ * - 派生语义变量（--vscode-background / --vscode-chat-bubble 等）直接取内置
+ *   Dark 2026 色值，前端不再读取 VS Code 活动主题，恒定深色外观。
+ * Tailwind 颜色、自定义元素、代码高亮全部消费这些变量。
  */
 :root {
   /* 字体（VS Code 默认） */
@@ -22,33 +20,26 @@
   --vscode-radius-lg: 8px;
   --vscode-radius-xl: 12px;
 
-  /*
-   * 派生语义变量：引用运行时注入的原始 token 变量（--vscode-tk-*，由
-   * /api/theme 注入，token 名 `.` 已转 `-`），带 Dark 2026 兜底色。
-   * bridge 不可达或 fetch 未完成时页面仍有可读深色外观。
-   */
-  --vscode-background: var(--vscode-tk-editor-background, #121314);
-  --vscode-foreground: var(--vscode-tk-foreground, #bfbfbf);
-  --vscode-card: var(--vscode-tk-sideBar-background, #191a1b);
-  --vscode-border: var(--vscode-tk-sideBar-border, #2a2b2c);
-  --vscode-input: var(--vscode-tk-input-background, #191a1b);
+  /* 派生语义变量：内置 Dark 2026 色值（恒定深色，不随 VS Code 主题变化） */
+  --vscode-background: #121314;
+  --vscode-foreground: #bfbfbf;
+  --vscode-card: #191a1b;
+  --vscode-border: #2a2b2c;
+  --vscode-input: #191a1b;
   --vscode-muted: #ffffff14;
-  --vscode-muted-fg: var(--vscode-tk-descriptionForeground, #8c8c8c);
-  --vscode-primary: var(--vscode-tk-button-background, #297aa0);
-  --vscode-primary-fg: var(--vscode-tk-button-foreground, #ffffff);
-  --vscode-secondary: var(--vscode-tk-editorWidget-background, #202122);
-  --vscode-ring: var(--vscode-tk-focusBorder, #3994bcb3);
+  --vscode-muted-fg: #8c8c8c;
+  --vscode-primary: #297aa0;
+  --vscode-primary-fg: #ffffff;
+  --vscode-secondary: #202122;
+  --vscode-ring: #3994bcb3;
 
   /* 聊天面板专属（Copilot 观感核心） */
-  --vscode-chat-bubble: var(--vscode-tk-chat-requestBubbleBackground, #ffffff13);
-  --vscode-chat-bubble-hover: var(
-    --vscode-tk-chat-requestBubbleHoverBackground,
-    #ffffff22
-  );
-  --vscode-chat-request-bg: var(--vscode-tk-chat-requestBackground, #ffffff08);
-  --vscode-chat-code-bg: var(--vscode-tk-textCodeBlock-background, #242526);
-  --vscode-chat-link: var(--vscode-tk-textLink-foreground, #48a0c7);
-  --vscode-chat-success: var(--vscode-tk-chat-linesAddedForeground, #54b054);
+  --vscode-chat-bubble: #ffffff13;
+  --vscode-chat-bubble-hover: #ffffff22;
+  --vscode-chat-request-bg: #ffffff08;
+  --vscode-chat-code-bg: #242526;
+  --vscode-chat-link: #48a0c7;
+  --vscode-chat-success: #54b054;
 }
 
 html,

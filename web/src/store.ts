@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { fetchTheme, applyTheme, type ThemeInfo } from './theme';
 
 /** 首次打开（无持久化）时，默认显示最近 7 天有会话活动的项目 */
 const RECENT_MS = 7 * 24 * 60 * 60 * 1000;
@@ -79,8 +78,6 @@ type DemoStore = {
   error: string | null;
   /** 写路径：发送中（send_message 已发出、send_result 未回执） */
   sending: boolean;
-  /** 活动主题（/api/theme），驱动 CSS 变量 + 代码高亮色表 */
-  theme: ThemeInfo | null;
   /** 侧边栏可见项目（持久化；首次默认最近 7 天活跃，之后保持上次状态） */
   visibleProjects: string[];
   /** 是否已初始化可见项目（false 时等待首次 session_list 按最近活跃初始化） */
@@ -96,7 +93,6 @@ export const useDemoStore = create<DemoStore>(() => ({
   version: 0,
   error: null,
   sending: false,
-  theme: null,
   visibleProjects: initialVisible ?? [],
   projectsInitialized: initialVisible !== null,
 }));
@@ -246,13 +242,6 @@ export function startConnection() {
   if (started) return;
   started = true;
   connect();
-  // 拉取活动主题并注入 CSS 变量（失败降级：保留 index.css 内置深色兜底）
-  fetchTheme().then((info) => {
-    if (info) {
-      applyTheme(info);
-      useDemoStore.setState({ theme: info });
-    }
-  });
 }
 
 /** 切换会话：设置激活 id 并请求服务端 replay（重复点击同一会话不重发） */

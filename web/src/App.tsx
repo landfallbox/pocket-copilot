@@ -2,14 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FluentProvider,
   webDarkTheme,
-  webLightTheme,
   Spinner,
   makeStyles,
 } from '@fluentui/react-components';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import {
   ChevronRightRegular as ChevronRightIcon,
   DismissRegular as DismissIcon,
@@ -51,12 +50,9 @@ import { sessionToMessages, type Message, type Part } from './convert';
 // = 主题                                                                      =
 // ============================================================================
 
-/** 根据活动主题选择 Fluent 基底（dark/light），语义色由 --vscode-* 变量统一覆盖 */
+/** 固定深色 Fluent 基底（不再读取 VS Code 主题），语义色由 --vscode-* 变量统一覆盖 */
 function useFluentBaseTheme() {
-  const theme = useDemoStore((s) => s.theme);
-  return theme && (theme.uiTheme === 'light' || theme.uiTheme === 'hcLight')
-    ? webLightTheme
-    : webDarkTheme;
+  return webDarkTheme;
 }
 
 // ============================================================================
@@ -236,15 +232,10 @@ function StepsGroup({ parts, running }: { parts: Part[]; running: boolean }) {
 
 /** 代码块：react-syntax-highlighter + VS Code 主题色表 */
 function CodeBlock({ language, code }: { language: string; code: string }) {
-  const theme = useDemoStore((s) => s.theme);
-  const style =
-    theme && (theme.uiTheme === 'light' || theme.uiTheme === 'hcLight')
-      ? oneLight
-      : vscDarkPlus;
   return (
     <SyntaxHighlighter
       language={language || 'text'}
-      style={style}
+      style={vscDarkPlus}
       customStyle={{
         margin: 0,
         background: 'var(--vscode-chat-code-bg)',

@@ -8,7 +8,6 @@ import {
   PORT,
   WEB_ROOT,
   WORKSPACE_STORAGE_ROOT,
-  VSCODE_SETTINGS_FILE,
 } from './config.js';
 
 const NODE_MODULES = path.resolve(
@@ -23,7 +22,6 @@ import { injectMessage } from './inject.js';
 import { SessionTitleStore } from './session-titles.js';
 import { ModelNameStore } from './model-name.js';
 import { buildProjectNameMap, workspaceHashOf } from './project-name.js';
-import { getThemeInfo } from './theme.js';
 import type { BridgeEvent } from './types.js';
 
 const MIME: Record<string, string> = {
@@ -118,20 +116,6 @@ function withRecorder(e: BridgeEvent): BridgeEvent {
 const server = http.createServer(async (req, res) => {
   try {
     const url = (req.url ?? '/').split('?')[0];
-    if (url === '/api/theme') {
-      const info = await getThemeInfo(VSCODE_SETTINGS_FILE);
-      if (!info) {
-        res.writeHead(503, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: 'theme unavailable' }));
-        return;
-      }
-      res.writeHead(200, {
-        'content-type': 'application/json; charset=utf-8',
-        'cache-control': 'no-cache',
-      });
-      res.end(JSON.stringify(info));
-      return;
-    }
     if (url.startsWith('/api/')) {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'not found' }));
