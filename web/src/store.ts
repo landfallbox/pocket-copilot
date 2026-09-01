@@ -1,32 +1,5 @@
 import { create } from 'zustand';
 
-/** 首次打开（无持久化）时，默认显示最近 7 天有会话活动的项目 */
-const RECENT_MS = 7 * 24 * 60 * 60 * 1000;
-const LS_KEY = 'copilot-bridge:visible-projects';
-
-/**
- * 读取持久化的可见项目列表。
- * 返回 null 表示“从未持久化过”（首次打开，需按最近 7 天活跃初始化）；
- * 返回数组（可能为空）表示用户已维护过，原样恢复上次的状态。
- */
-function loadVisibleProjects(): string[] | null {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (raw === null) return null;
-    const o = JSON.parse(raw) as { visible?: unknown };
-    return Array.isArray(o.visible) ? (o.visible as string[]) : [];
-  } catch {
-    return null;
-  }
-}
-function saveVisibleProjects(visible: string[]): void {
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify({ visible }));
-  } catch {
-    // 隐私模式等写入失败时静默降级（仅本次会话生效）
-  }
-}
-
 /** 与主服务 BridgeEvent 同构（只声明 demo 用到的字段） */
 type Tool = {
   toolId?: string;
@@ -78,13 +51,7 @@ type DemoStore = {
   error: string | null;
   /** 写路径：发送中（send_message 已发出、send_result 未回执） */
   sending: boolean;
-  /** 侧边栏可见项目（持久化；首次默认最近 7 天活跃，之后保持上次状态） */
-  visibleProjects: string[];
-  /** 是否已初始化可见项目（false 时等待首次 session_list 按最近活跃初始化） */
-  projectsInitialized: boolean;
 };
-
-const initialVisible = loadVisibleProjects();
 
 export const useDemoStore = create<DemoStore>(() => ({
   connected: false,
@@ -93,8 +60,6 @@ export const useDemoStore = create<DemoStore>(() => ({
   version: 0,
   error: null,
   sending: false,
-  visibleProjects: initialVisible ?? [],
-  projectsInitialized: initialVisible !== null,
 }));
 
 const bump = () => useDemoStore.setState((s) => ({ version: s.version + 1 }));
@@ -146,19 +111,12 @@ function handleEvent(e: Record<string, any>) {
       if (sum.project) sess.project = sum.project;
       if (sum.title) sess.title = sum.title;
     }
-    // 同步可见项目（首次初始化 / 新项目自动加入）
-    const s = useDemoStore.getState();
-    const allProjects = [...new Set([...s.sessions.values()].map((x) => x.project).filter(Boolean))] as string[];
-    syncVisibleProjects(allProjects);
-    // 自动选中第一个可见会话
+    // 自动选中最近活跃的会话
     const s2 = useDemoStore.getState();
     if (!s2.activeSessionId && s2.sessions.size > 0) {
-      const visible = new Set(s2.visibleProjects);
-      const candidates = [...s2.sessions.values()].filter(
-        (x) => x.project && visible.has(x.project),
-      );
-      const pool = candidates.length > 0 ? candidates : [...s2.sessions.values()];
-      const first = pool.sort((a, b) => b.lastActivity - a.lastActivity)[0];
+      const first = [...s2.sessions.values()].sort(
+        (a, b) => b.lastActivity - a.lastActivity,
+      )[0];
       useDemoStore.setState({ activeSessionId: first.sessionId });
       ws?.send(JSON.stringify({ type: 'replay', sessionId: first.sessionId }));
     }
@@ -260,74 +218,6 @@ export function refreshActive() {
   const id = s.activeSessionId;
   if (id && ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'replay', sessionId: id }));
-  }
-}
-
-/**
- * 计算最近 7 天内有会话活动的项目集合（仅首次初始化用）。
- */
-export function recentlyActiveProjects(sessions: SessionState[]): string[] {
-  const cutoff = Date.now() - RECENT_MS;
-  const set = new Set<string>();
-  for (const s of sessions) {
-    if (s.project && s.lastActivity >= cutoff) set.add(s.project);
-  }
-  return [...set];
-}
-
-/**
- * 项目是否可见：在 visibleProjects 列表中即显示。
- */
-export function isProjectVisible(project: string): boolean {
-  return useDemoStore.getState().visibleProjects.includes(project);
-}
-
-/**
- * 切换项目可见性（管理项目面板 / 项目头眼睛按钮）。
- */
-export function toggleProject(project: string): void {
-  const { visibleProjects } = useDemoStore.getState();
-  const visible = visibleProjects.includes(project)
-    ? visibleProjects.filter((x) => x !== project)
-    : [...visibleProjects, project];
-  saveVisibleProjects(visible);
-  useDemoStore.setState((s) => ({
-    visibleProjects: visible,
-    version: s.version + 1,
-  }));
-}
-
-/**
- * 同步可见项目：
- * - 首次（无持久化）：按最近 7 天活跃初始化。
- * - 已初始化：自动加入“近期活跃”的新项目（用户新开的会话）。
- *   只加 recent 项目是关键：启动重放期所有历史项目会陆续出现，
- *   若无条件加入会把全部历史项目都塞进来；限定 recent 后，
- *   历史非活跃项目不会误入，真正新开的会话（必然 recent）才会自动出现。
- */
-function syncVisibleProjects(allProjects: string[]): void {
-  const s = useDemoStore.getState();
-  const recentSet = new Set(recentlyActiveProjects([...s.sessions.values()]));
-  if (!s.projectsInitialized) {
-    // 首次：按最近 7 天活跃初始化
-    const recent = [...recentSet];
-    saveVisibleProjects(recent);
-    useDemoStore.setState({ visibleProjects: recent, projectsInitialized: true });
-    return;
-  }
-  // 已初始化：自动加入近期活跃的新项目
-  const current = new Set(s.visibleProjects);
-  let changed = false;
-  for (const p of allProjects) {
-    if (!current.has(p) && recentSet.has(p)) {
-      current.add(p);
-      changed = true;
-    }
-  }
-  if (changed) {
-    const next = [...current];
-    saveVisibleProjects(next);
-    useDemoStore.setState({ visibleProjects: next });
   }
 }
 
