@@ -197,6 +197,11 @@ export class Registry {
     this.emit({ type: 'session_list', sessions: this.summaries() });
   }
 
+  /** 取会话项目名（写路径按窗口标题定位 VS Code 实例用）；无则 undefined */
+  getProject(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.project;
+  }
+
   /** 文件被重写/截断时重置会话（turn 内容全来自 heimdall，jsonl 重写不影响） */
   resetSession(sessionId: string): void {
     const s = this.sessions.get(sessionId);

@@ -3,7 +3,13 @@ import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { HOST, PORT, WEB_ROOT, WORKSPACE_STORAGE_ROOT } from './config.js';
+import {
+  HOST,
+  PORT,
+  WEB_ROOT,
+  WORKSPACE_STORAGE_ROOT,
+  VSCODE_SETTINGS_FILE,
+} from './config.js';
 
 const NODE_MODULES = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -13,9 +19,11 @@ const NODE_MODULES = path.resolve(
 import { SessionTailer } from './tailer.js';
 import { HeimdallTailer } from './heimdall-tailer.js';
 import { Registry } from './registry.js';
+import { injectMessage } from './inject.js';
 import { SessionTitleStore } from './session-titles.js';
 import { ModelNameStore } from './model-name.js';
 import { buildProjectNameMap, workspaceHashOf } from './project-name.js';
+import { getThemeInfo } from './theme.js';
 import type { BridgeEvent } from './types.js';
 
 const MIME: Record<string, string> = {
@@ -65,6 +73,40 @@ const tailer = new SessionTailer(WORKSPACE_STORAGE_ROOT, {
   onRewrite: (sessionId) => registry.resetSession(sessionId),
 });
 
+/**
+ * 写路径：把消息注入目标会话所在的 VS Code 窗口。
+ * 前置校验：会话须已知（registry 有）+ 有项目名（窗口标题匹配）+ 有标题（会话切换匹配）。
+ * 结果只回给发起方（send_result），不广播。
+ */
+async function handleSendMessage(
+  ws: WebSocket,
+  sessionId: string,
+  text: string,
+): Promise<void> {
+  const reply = (ok: boolean, error?: string) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'send_result', sessionId, ok, ...(error ? { error } : {}) }));
+    }
+  };
+  const project = registry.getProject(sessionId);
+  if (!project) {
+    reply(false, '会话项目未知（无法定位 VS Code 窗口）');
+    return;
+  }
+  const title = titleStore.get(sessionId);
+  if (!title) {
+    reply(false, '会话标题未知（无法在会话列表中定位，可能刚创建尚未生成标题）');
+    return;
+  }
+  const textTrimmed = text.trim();
+  if (!textTrimmed) {
+    reply(false, '消息为空');
+    return;
+  }
+  const result = await injectMessage(project, title, textTrimmed);
+  reply(result.ok, result.error);
+}
+
 /** 给 hello/session_list 附上记录源健康状态（区分"模型没输出"与"链路断了"） */
 function withRecorder(e: BridgeEvent): BridgeEvent {
   if (e.type === 'hello' || e.type === 'session_list') {
@@ -76,6 +118,20 @@ function withRecorder(e: BridgeEvent): BridgeEvent {
 const server = http.createServer(async (req, res) => {
   try {
     const url = (req.url ?? '/').split('?')[0];
+    if (url === '/api/theme') {
+      const info = await getThemeInfo(VSCODE_SETTINGS_FILE);
+      if (!info) {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'theme unavailable' }));
+        return;
+      }
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-cache',
+      });
+      res.end(JSON.stringify(info));
+      return;
+    }
     if (url.startsWith('/api/')) {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'not found' }));
@@ -132,7 +188,7 @@ wss.on('connection', (ws) => {
     ),
   );
   ws.on('message', (buf) => {
-    let msg: { type?: string; sessionId?: string };
+    let msg: { type?: string; sessionId?: string; text?: string };
     try {
       msg = JSON.parse(buf.toString('utf8'));
     } catch {
@@ -143,6 +199,9 @@ wss.on('connection', (ws) => {
       if (state) {
         ws.send(JSON.stringify({ type: 'replay', ...state }));
       }
+    } else if (msg.type === 'send_message' && msg.sessionId && msg.text) {
+      // 写路径：UIA 注入 VS Code（异步，结果经 send_result 回执给发起方）
+      void handleSendMessage(ws, msg.sessionId, msg.text);
     }
   });
   ws.on('close', () => clients.delete(ws));

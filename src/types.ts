@@ -227,6 +227,13 @@ export type BridgeEvent =
       items: Item[];
     }
   | {
+      /** 写路径发送结果（send_message 的回执，仅发给发起方） */
+      type: 'send_result';
+      sessionId: string;
+      ok: boolean;
+      error?: string;
+    }
+  | {
       /** 解析/归属错误（如 systemTail 解析失败）：前端展示 + 后端已记日志 */
       type: 'error';
       message: string;

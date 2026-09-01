@@ -81,7 +81,7 @@
 | "写"的范围 | 全部交互功能都在目标内，但**逐步实现**，第一步是发送文字消息 |
 | M2 消息格式 | 纯文本 |
 | diff 体验 | 最终完整实现，先做基础版（有待审编辑 + diff 内容展示） |
-| 写路径具体机制 | 后置讨论（CDP 等，含会话切换行为的影响） |
+| 写路径具体机制 | **UIA 主路径**（2026-08-31 Spike 2 实测定稿：零侵入，不重启 VS Code/不开调试端口/不碰注册表；PowerShell + .NET UIAutomation 子进程按需调用；剪贴板粘贴注入 + 会话选择器切换）；CDP 降为备选（需调试端口启动参数） |
 | 手机端 App 形态 | 早期仅浏览器（开发/测试用，不做 PWA 壳）；体验足够完整时直接打包为真 App（如 Capacitor） |
 | 前端技术栈 | React 19 + Vite + TS + zustand（沿用 demo 已验证底座）；**移除 @assistant-ui/react**，展示层手写组件 |
 | bridge 架构 | 不引入框架，现有裸 Node 骨架扩展 |
@@ -100,14 +100,22 @@
                                                                 │      （会话/请求骨架 + done + token 数）
                                                                 │      + chatEditingSessions/（待审 diff）
                                                                 │      → 对齐 → 规范化事件流
-                                                                └── 写：注入 VS Code（M2 起，机制后置讨论，
-                                                                       CDP 为首选候选，降级链见下）
+                                                                └── 写：注入 VS Code（M2 起，UIA 主路径，
+                                                                       CDP 备选，见 6 降级链）
 ```
 
 - 单一事实来源 = VS Code 进程内的真实 Copilot 会话（读方向直接读它的落盘数据，写方向驱动它的 UI）
 - 手机和 PC 操作的是字面意义上的同一个 Copilot，记忆 / harness / 模型配置天然一致
-- 写方向备选降级链：CDP（首选）→ Windows UIA → 键盘注入（剪贴板 + 回车，最抗 UI 变化）
-- 进程拓扑：M1 两个进程（heimdall 生产路由 + copilot-bridge）；写服务 M2 再议（倾向独立进程，CDP 连接是重资源）
+- 写方向降级链（2026-08-31 Spike 2 实测后定稿）：**Windows UIA（主路径，零侵入实测通过）→ CDP（备选，需 `--remote-debugging-port` 启动）**；键盘注入（剪贴板 + 回车）已内化于 UIA 主路径（粘贴 + Enter 就是键盘注入）
+- 进程拓扑：M1 两个进程（heimdall 生产路由 + copilot-bridge）；写路径 UIA 走 PowerShell 子进程按需调用（无常驻连接、无重资源），bridge 本体直接内嵌写模块，无需独立进程
+
+**Spike 2 UIA 实测结论（2026-08-31，全链路验证通过）**：
+- **前提**：VS Code 无障碍树是惰性的，`accessibilitySupport` 默认 auto 时树几乎为空（15 元素）；用户 settings.json 设 `"accessibilitySupport": "on"` 后完整构建（704 元素）。已写入用户配置，可逆；正式实现时需提示用户此前提
+- **实现载体**：PowerShell + .NET UIAutomation（系统自带，零依赖零构建，~1s 延迟可接受）。nut-js 已证死路（libnut-win32 无元素检查能力，依赖已卸载）
+- **注入流程（已验证）**：Win32 `ShowWindow(hwnd,9)+SetForegroundWindow` 激活 VS Code 窗口到前台（只做元素 SetFocus 不够，键盘事件发给前台窗口）→ 按 `ControlType=Edit` + 相对窗口坐标定位聊天输入框 → 元素 SetFocus → 剪贴板保存/写入/`SendKeys("^v")`/恢复。ValuePattern.SetValue 对 React 受控 contenteditable 无效（不触发 input 事件），必须走剪贴板粘贴
+- **会话定位（已验证）**：读面板顶部 `Button 'Pick Agent Session'` 的 name = 当前会话标题；与 bridge SessionTitleStore（vscdb 权威标题）比对，不匹配则 Invoke 该按钮打开会话列表（顶部含 `Search agent sessions by name` 搜索框），ListItem name 格式 `"<标题>, Local • <相对时间>"`（取第一个逗号前段做标题前缀匹配）→ 点击 → 重读按钮 name 确认切换完成 → 再注入
+- **窗口匹配**：标题 `*copilot-bridge - Visual Studio Code*`（工作区名在标题里，天然按窗口/项目隔离）
+- **待确认（正式实现前）**：① Enter 发送行为（agent 模式长文本换行是否也是 Enter，需实测）；② 输入框定位坐标（spike 用屏幕绝对坐标 x>=2000,y>=1100，须改相对窗口定位）；③ 跨项目会话切换行为（列表默认只显示当前窗口项目的会话）
 
 ## 7. 环境事实（均已在本机验证）
 
@@ -274,7 +282,7 @@ jsonl 记录结构（抽样验证）：
 0. **会话归属对齐（关键风险点，方案承重墙）——✅ 2026-08-28 在线验证通过**：见 8.3。主键（`<userRequest>` 末段提取）/消歧（历史指纹）/校验（token 时序配对）三层在真实流量上均成立，浏览器正确渲染助手正文；在线验证修正"取末段"与 chunk 竞态两个 bug；残留 @文件富内容与并行碰撞样本不阻塞
 1. **脆弱性**：写方向依赖 VS Code UI 结构，版本升级可能失效。缓解：固定 VS Code 版本 + Playwright 冒烟回归脚本（发消息→检查回复）
 2. **VS Code 必须开着**：会话活在 VS Code 进程里，这是接入本体的固有约束
-3. **法律边界**：读自己本地文件 = 合规；CDP 驱动自己机器上的 UI = 合规（等同自己操作）；反编译 / 复制分发微软代码 = 不做
+3. **法律边界**：读自己本地文件 = 合规；Windows UIA 自动化驱动自己机器上的 VS Code UI = 合规（等同自己操作，且零侵入：不改启动参数/注册表/进程配置）；反编译 / 复制分发微软代码 = 不做
 4. **长期**：`vscode.chat` API 在持续扩张，若未来出现官方会话级 API，写方向可整体替换为干净实现，读方向不受影响
 5. **项目名映射——✅ 2026-08-27 已验证**：`workspaceStorage\<hash>\workspace.json` 实测存在（37 个目录 34 个有，缺的 3 个是 ext-dev 等特殊目录）。单根 `folder`=file URI、多根 `workspace`=.code-workspace 路径；项目名取路径末段（多根取 .code-workspace 文件名，folders 为空时降级显示文件名）。无需降级方案
 6. **chatEditingSessions/state.json 结构——✅ 2026-08-27 已验证**：实测结构 = `{version:2, initialFileContents:[[uri,hash]], timeline:{checkpoints[], currentEpoch, fileBaselines[], operations:[{type:'textEdit'|'delete', uri, requestId, epoch, edits:[{text,range}]}]}, recentSnapshot:{entries:[{resource, originalHash, currentHash, state, ...}]}}`；`contents/<7位hash>`=文件内容，`originalHash`/`currentHash` 都指向 contents/ 文件 → **diff 可还原**（两文件对比或读 operations edits）。残留：`state` 枚举值（实测 0/1/2）与"待审"状态的映射待 M1 开发时触发一次待审编辑确认（低成本、非阻塞）
@@ -286,7 +294,7 @@ jsonl 记录结构（抽样验证）：
 | 1（先做，低风险） | 文件监听 → 事件流 → 最简网页实时显示当前会话 | 浏览器上看到真实 Copilot 会话随 PC 侧操作更新 | **基础设施已跑通**（tailer/WS/前端）；"内容显示"目标由 1.5 系列接管（内容源改为 heimdall） |
 | **1.5a（关键风险验证，最高优先级）** | **对齐可行性最小实验**：抓 1-2 个真实 heimdall 请求体（临时开启请求体日志或代理抓包），对比 jsonl userText，验证"最后一条用户消息匹配"在真实数据上成立（含并行会话、@上下文包裹情况）；顺带摸清 heimdall 实际收到的流量构成（非聊天流量占比），确定过滤规则 | 真实数据上主键匹配成功率可接受，消歧/归一化规则明确，过滤规则明确 | **✅ 2026-08-27 离线验证通过**（用 debug-logs 替代 heimdall 请求体 + usage jsonl 替代 request_end；主键/消歧/token 三层均成立，见 8.3；非聊天流量过滤规则与 @文件富内容待 1.5 在线补验） |
 | 1.5（读路径重构，2026-08-27 立项） | heimdall 加请求/响应记录（worktree 分支开发）；bridge 读路径改为 heimdall 记录 + jsonl 索引混合 | 流式文本/思考/工具从 heimdall 记录可靠还原，会话归属按对齐策略（8.3）成功 | **✅ 2026-08-28 在线验证通过**（开发版 router 4100 + Qwen 3.8 27B DEV 真实流量：router 落盘 → bridge 读取 → aligner 对齐 → 浏览器渲染助手正文全链路打通）。在线验证暴露并修复 3 个 bug：① lastUserText 是完整 prompt 非纯输入（须提取 `<userRequest>`）；② 取最后一个 `<userRequest>` 块（context 可能回显含该标签字面量的历史命令）；③ chunk 丢失竞态（重启重放 heimdall 先于 jsonl，须缓冲 chunk + pending 重试）。**残留**：@文件富内容/并行碰撞样本/非聊天流量过滤（不阻塞） |
-| 2 | VS Code 加 `--remote-debugging-port` 启动，Playwright 经 CDP 附加，手机发一条消息进真实会话 | 消息出现在 PC 的 Copilot 会话中，回复两端都可见 | 未开始 |
+| 2 | 写路径验证（机制 2026-08-31 由 CDP 改为 **Windows UIA**）：不重启 VS Code/不开调试端口，PowerShell + .NET UIAutomation 定位会话（Pick Agent Session 选择器）+ 输入框，剪贴板粘贴注入一条消息 | 消息出现在 PC 的 Copilot 会话中，回复两端都可见 | **✅ 2026-08-31 实测通过**（注入 + 会话定位全链路验证，结论见 6；CDP 方案因需 `--remote-debugging-port` 启动参数被用户否决后弃用） |
 
 Spike 链：**1.5a（对齐验证，承重墙）→ 1.5（heimdall 记录 + 读路径）→ 2（写路径）**；1.5a 不过 = 读方案回炉。
 
@@ -299,7 +307,7 @@ Spike 链：**1.5a（对齐验证，承重墙）→ 1.5（heimdall 记录 + 读�
 5. ~~copilot-bridge 读路径对接 heimdall 记录；对齐器实现（主键+指纹+校验三层）~~（2026-08-27 代码完成；**2026-08-28 真实流量在线验证通过**：开发版 router 4100 + Qwen 3.8 27B DEV，全链路打通，浏览器正确渲染助手正文；修复 lastUserText 包装/取末段/chunk 竞态 3 个 bug。残留 @文件富内容/并行碰撞/非聊天流量过滤不阻塞）
 6. ~~验证两个未验证假设（风险 5/6）~~（2026-08-27 已验证：workspace.json 映射可行 + state.json 结构已取样，diff 可还原；残留仅 state 枚举与"待审"状态映射，M1 开发时触发一次待审编辑确认）
 7. ~~前端迁移（demo/ → web/，去 assistant-ui）~~（2026-08-27 完成：手写组件替代 assistant-ui，react-markdown/lucide-react 保留，构建通过，内置浏览器验证会话列表/用户气泡/连接状态正常）+ 安装 Tailscale（PC + 手机），浏览器访问 `http://<PC的tailscale-ip>:8765` 验证
-8. Spike 2：CDP 写路径；后续：审批流细化（chatEditingSessions）、通知、服务自启、VS Code 升级回归机制
+8. ~~Spike 2：写路径验证~~（2026-08-31 实测通过，机制 UIA 定稿，见 6/14）；后续：M2 正式实现（Enter 发送实测、坐标相对窗口化、Node 注入模块 + WS `send_message` + 前端输入框）、diff 基础版（M1 最后一块）、审批流细化（chatEditingSessions）、通知、服务自启、VS Code 升级回归机制
 
 ## 16. 用户偏好（新会话必须遵守）
 

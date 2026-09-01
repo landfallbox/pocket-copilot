@@ -51,3 +51,25 @@ export const WEB_ROOT = path.resolve(
   '..',
   'web',
 );
+
+/** VS Code 安装根（resources/app 所在），可用 VSCODE_APP_ROOT 覆盖 */
+export const VSCODE_APP_ROOT =
+  process.env.VSCODE_APP_ROOT ??
+  'D:\\App\\Microsoft VS Code\\110a328ea5\\resources\\app';
+
+/** 内置主题扩展目录（主题 JSON + 主题注册 package.json 所在） */
+export const THEME_DEFAULTS_DIR = path.join(
+  VSCODE_APP_ROOT,
+  'extensions',
+  'theme-defaults',
+);
+
+/** 用户 settings.json（workbench.colorTheme 所在） */
+export const VSCODE_SETTINGS_FILE = path.join(
+  os.homedir(),
+  'AppData',
+  'Roaming',
+  'Code',
+  'User',
+  'settings.json',
+);
