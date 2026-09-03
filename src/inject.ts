@@ -27,12 +27,30 @@ export interface InjectResult {
  * @param sessionTitle 目标会话标题（SessionTitleStore 获取）
  * @param message 要发送的消息文本
  */
+/** 选中值（UIA 选项标签，发消息前改 PC 端下拉） */
+export interface Selection {
+  /** Agent 模式标签（Agent/Ask/Plan） */
+  agent?: string;
+  /** 模型标签（chatLanguageModels name，如 "Qwen 3.8 27B"） */
+  model?: string;
+  /** 思考程度标签（Low/Medium/High/Extra High/Max） */
+  thinking?: string;
+}
+
 export async function injectMessage(
   project: string,
   sessionTitle: string,
   message: string,
+  selection?: Selection,
 ): Promise<InjectResult> {
-  const script = buildScript(project, sessionTitle, message);
+  const script = buildScript(
+    project,
+    sessionTitle,
+    message,
+    selection?.agent ?? '',
+    selection?.model ?? '',
+    selection?.thinking ?? '',
+  );
   return runPowerShell(script);
 }
 
@@ -41,11 +59,17 @@ function buildScript(
   project: string,
   sessionTitle: string,
   message: string,
+  agent: string,
+  model: string,
+  thinking: string,
 ): string {
   const esc = (s: string) => s.replace(/'/g, "''");
   const proj = esc(project);
   const title = esc(sessionTitle);
   const msg = esc(message);
+  const agentEsc = esc(agent);
+  const modelEsc = esc(model);
+  const thinkEsc = esc(thinking);
 
   return `Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -54,15 +78,22 @@ Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public class Win32inj {
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
 }
 "@
+[void][Win32inj]::SetProcessDPIAware()
 
 $ErrorActionPreference = 'Stop'
 $project = '${proj}'
 $title = '${title}'
 $message = '${msg}'
+$agent = '${agentEsc}'
+$model = '${modelEsc}'
+$thinking = '${thinkEsc}'
 
 # 1. 找 VS Code 窗口
 $root = [System.Windows.Automation.AutomationElement]::RootElement
@@ -120,6 +151,83 @@ if ($null -ne $pick) {
   }
   $target.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
   Start-Sleep -Milliseconds 800
+}
+
+# 3.5 改选中值（Agent / 模型 / 思考程度）——锚定激活面板，坐标点击下拉
+$anchorCond = New-Object System.Windows.Automation.PropertyCondition(
+  [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [System.Windows.Automation.ControlType]::Edit)
+$anchorEdits = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $anchorCond)
+$anchor = $null; $anchorY = -1
+foreach ($e in $anchorEdits) {
+  $r = $e.Current.BoundingRectangle
+  if ($r.Width -lt 300 -or $r.Width -gt 600) { continue }
+  if ($r.Height -lt 15 -or $r.Height -gt 120) { continue }
+  if ([double]::IsInfinity($r.Y) -or [double]::IsNaN($r.Y)) { continue }
+  if ($r.Y -gt $anchorY) { $anchorY = $r.Y; $anchor = $e }
+}
+
+function Find-PanelButton([string]$prefix, [double]$baseY) {
+  $found = $null; $best = [double]::MaxValue
+  $bcond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Button)
+  $list = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $bcond)
+  foreach ($b in $list) {
+    if ([string]$b.Current.Name -notlike ($prefix + '*')) { continue }
+    $r = $b.Current.BoundingRectangle
+    if ([double]::IsInfinity($r.Y)) { continue }
+    if ($r.Y -le $baseY) { continue }
+    if ($r.Y -gt ($baseY + 120)) { continue }
+    if ($r.Y -lt $best) { $best = $r.Y; $found = $b }
+  }
+  return $found
+}
+
+function Click-At([int]$x, [int]$y) {
+  [void][Win32inj]::SetCursorPos($x, $y)
+  Start-Sleep -Milliseconds 150
+  [void][Win32inj]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+  Start-Sleep -Milliseconds 80
+  [void][Win32inj]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+}
+
+function Set-Dropdown($btn, [string]$wantLabel) {
+  if ($null -eq $btn -or -not $wantLabel) { return }
+  $br = $btn.Current.BoundingRectangle
+  Click-At ([int]($br.X + $br.Width / 2)) ([int]($br.Y + $br.Height / 2))
+  Start-Sleep -Milliseconds 1200
+  $mcond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Menu)
+  $menus = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $mcond)
+  $menu = $null
+  foreach ($m in $menus) {
+    $mr = $m.Current.BoundingRectangle
+    if ($mr.IsEmpty -or [double]::IsInfinity($mr.X)) { continue }
+    $menu = $m; break
+  }
+  if ($null -eq $menu) { [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); return }
+  $items = $menu.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+  $target = $null
+  foreach ($it in $items) {
+    $nm = [string]$it.Current.Name
+    if ($nm -eq '') { continue }
+    $label = $nm.Split(',')[0].Trim()
+    if ($label -ieq $wantLabel) { $target = $it; break }
+  }
+  if ($null -eq $target) { [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); return }
+  $tr = $target.Current.BoundingRectangle
+  Click-At ([int]($tr.X + $tr.Width / 2)) ([int]($tr.Y + $tr.Height / 2))
+  Start-Sleep -Milliseconds 600
+}
+
+if ($null -ne $anchor) {
+  $baseY = $anchor.Current.BoundingRectangle.Y
+  Set-Dropdown (Find-PanelButton 'Set Agent' $baseY) $agent
+  Set-Dropdown (Find-PanelButton 'Models,' $baseY) $model
+  Set-Dropdown (Find-PanelButton 'Thinking Effort' $baseY) $thinking
+  Start-Sleep -Milliseconds 400
 }
 
 # 4. 定位聊天输入框（Edit + 宽高 300-600 x 15-120 + 最底部）

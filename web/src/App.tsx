@@ -36,6 +36,9 @@ import {
   startConnection,
   selectSession,
   sendMessage,
+  pickMode,
+  pickModel,
+  pickThinking,
   type SessionState,
 } from './store';
 import { sessionToMessages, type Message, type Part } from './convert';
@@ -506,16 +509,21 @@ const inputStyles = makeStyles({
   },
   box: {
     display: 'flex',
-    alignItems: 'flex-end',
+    flexDirection: 'column',
     gap: '8px',
     width: '100%',
     maxWidth: '720px',
     margin: '0 auto',
     backgroundColor: 'var(--vscode-input)',
     border: '1px solid var(--vscode-border)',
-    borderRadius: '24px',
-    padding: '6px 6px 6px 16px',
+    borderRadius: '16px',
+    padding: '8px 10px',
     transition: 'border-color 0.15s',
+  },
+  bottomRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
   },
   textarea: {
     flex: 1,
@@ -533,6 +541,7 @@ const inputStyles = makeStyles({
   },
   send: {
     flexShrink: 0,
+    marginLeft: 'auto',
     width: '34px',
     height: '34px',
     borderRadius: '50%',
@@ -557,6 +566,215 @@ const inputStyles = makeStyles({
     textAlign: 'center',
   },
 });
+
+// ============================================================================
+// = 选择栏（Agent / 模型 / 思考程度，发消息时联动 PC 端）                  =
+// ============================================================================
+
+const selectionStyles = makeStyles({
+  bar: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+  },
+  chip: {
+    display: 'flex',
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: '3px',
+    padding: '3px 6px',
+    borderRadius: '6px',
+    fontSize: '12px',
+    border: 'none',
+    backgroundColor: 'transparent',
+    color: 'var(--vscode-muted-fg)',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    maxWidth: '180px',
+  },
+  chipLabel: {
+    flexShrink: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  menu: {
+    position: 'absolute',
+    bottom: 'calc(100% + 6px)',
+    left: 0,
+    zIndex: 40,
+    minWidth: '160px',
+    maxHeight: '240px',
+    overflowY: 'auto',
+    backgroundColor: 'var(--vscode-card)',
+    border: '1px solid var(--vscode-border)',
+    borderRadius: '10px',
+    boxShadow: '0 -2px 16px rgba(0, 0, 0, 0.4)',
+    padding: '4px',
+  },
+  item: {
+    display: 'block',
+    width: '100%',
+    padding: '7px 10px',
+    borderRadius: '7px',
+    fontSize: '13px',
+    textAlign: 'left',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--vscode-foreground)',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  },
+  itemActive: {
+    backgroundColor: 'var(--vscode-muted)',
+    fontWeight: 600,
+  },
+});
+
+const THINKING_LABELS: Record<string, string> = {
+  none: 'None',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra High',
+  max: 'Max',
+};
+const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
+/** 输入框上方三项选择：Agent 模式 / 模型 / 思考程度（点击弹菜单，发消息时生效） */
+function SelectionBar() {
+  const styles = selectionStyles();
+  const version = useDemoStore((s) => s.version);
+  const activeSessionId = useDemoStore((s) => s.activeSessionId);
+  const modelList = useDemoStore((s) => s.modelList);
+  const selMode = useDemoStore((s) => s.selMode);
+  const selModelId = useDemoStore((s) => s.selModelId);
+  const selThinking = useDemoStore((s) => s.selThinking);
+  const [open, setOpen] = useState<null | 'agent' | 'model' | 'thinking'>(null);
+
+  void version;
+  if (!activeSessionId) return null;
+
+  const curModel = modelList.find((m) => m.identifier === selModelId);
+  const efforts = curModel?.supportsReasoningEffort ?? [];
+
+  return (
+    <div className={styles.bar}>
+      {open && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 39 }}
+          onClick={() => setOpen(null)}
+        />
+      )}
+      {/* Agent 模式 */}
+      <div style={{ position: 'relative' }}>
+        <button
+          className={styles.chip}
+          onClick={() => setOpen(open === 'agent' ? null : 'agent')}
+        >
+          <span className={styles.chipLabel}>{cap(selMode ?? 'agent')}</span>
+          <ChevronDownIcon fontSize={12} />
+        </button>
+        {open === 'agent' && (
+          <div className={styles.menu}>
+            {['agent', 'plan'].map((m) => (
+              <button
+                key={m}
+                className={
+                  selMode === m
+                    ? `${styles.item} ${styles.itemActive}`
+                    : styles.item
+                }
+                onClick={() => {
+                  pickMode(m);
+                  setOpen(null);
+                }}
+              >
+                {cap(m)}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {/* 模型 */}
+      <div style={{ position: 'relative' }}>
+        <button
+          className={styles.chip}
+          onClick={() => setOpen(open === 'model' ? null : 'model')}
+        >
+          <span className={styles.chipLabel}>
+            {curModel?.name ?? selModelId ?? '模型'}
+          </span>
+          <ChevronDownIcon fontSize={12} />
+        </button>
+        {open === 'model' && (
+          <div className={styles.menu} style={{ minWidth: '200px' }}>
+            {modelList.length === 0 && (
+              <div
+                style={{
+                  padding: '8px 10px',
+                  fontSize: '12px',
+                  color: 'var(--vscode-muted-fg)',
+                }}
+              >
+                无模型
+              </div>
+            )}
+            {modelList.map((m) => (
+              <button
+                key={m.identifier}
+                className={
+                  selModelId === m.identifier
+                    ? `${styles.item} ${styles.itemActive}`
+                    : styles.item
+                }
+                onClick={() => {
+                  pickModel(m.identifier);
+                  setOpen(null);
+                }}
+              >
+                {m.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {/* 思考程度（仅当前模型支持时显示） */}
+      {efforts.length > 0 && (
+        <div style={{ position: 'relative' }}>
+          <button
+            className={styles.chip}
+            onClick={() => setOpen(open === 'thinking' ? null : 'thinking')}
+          >
+            <span className={styles.chipLabel}>
+              {THINKING_LABELS[selThinking ?? ''] ?? selThinking ?? '—'}
+            </span>
+            <ChevronDownIcon fontSize={12} />
+          </button>
+          {open === 'thinking' && (
+            <div className={styles.menu}>
+              {efforts.map((lv) => (
+                <button
+                  key={lv}
+                  className={
+                    selThinking === lv
+                      ? `${styles.item} ${styles.itemActive}`
+                      : styles.item
+                  }
+                  onClick={() => {
+                    pickThinking(lv);
+                    setOpen(null);
+                  }}
+                >
+                  {THINKING_LABELS[lv] ?? lv}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function InputFooter() {
   const styles = inputStyles();
@@ -592,14 +810,17 @@ function InputFooter() {
           disabled={!activeSessionId}
           rows={1}
         />
-        <button
-          className={canSend ? styles.send : `${styles.send} ${styles.sendDisabled}`}
-          onClick={submit}
-          disabled={!canSend}
-          aria-label="发送"
-        >
-          {sending ? <Spinner size="tiny" /> : <SendIcon fontSize={16} />}
-        </button>
+        <div className={styles.bottomRow}>
+          <SelectionBar />
+          <button
+            className={canSend ? styles.send : `${styles.send} ${styles.sendDisabled}`}
+            onClick={submit}
+            disabled={!canSend}
+            aria-label="发送"
+          >
+            {sending ? <Spinner size="tiny" /> : <SendIcon fontSize={16} />}
+          </button>
+        </div>
       </div>
       {sending && (
         <div className={styles.hint}>

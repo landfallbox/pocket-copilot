@@ -15,11 +15,13 @@
  */
 import fsp from 'node:fs/promises';
 import { CHAT_LANGUAGE_MODELS_FILE } from './config.js';
+import type { ModelChoice } from './types.js';
 
 /** 注册表结构：provider 数组，每个含 vendor + models[] */
 interface RegistryModel {
   id?: string;
   name?: string;
+  supportsReasoningEffort?: string[];
 }
 interface RegistryProvider {
   name?: string;
@@ -47,8 +49,33 @@ export function buildModelNameMap(content: string): Map<string, string> {
   return map;
 }
 
+/** 解析注册表内容 → 模型选项列表（identifier / name / supportsReasoningEffort） */
+export function buildModelList(content: string): ModelChoice[] {
+  const out: ModelChoice[] = [];
+  let providers: RegistryProvider[];
+  try {
+    providers = JSON.parse(content) as RegistryProvider[];
+  } catch {
+    return out;
+  }
+  if (!Array.isArray(providers)) return out;
+  for (const p of providers) {
+    if (!p.vendor || !p.name) continue;
+    for (const m of p.models ?? []) {
+      if (!m.id || !m.name) continue;
+      out.push({
+        identifier: `${p.vendor}/${p.name}/${m.id}`,
+        name: m.name,
+        supportsReasoningEffort: m.supportsReasoningEffort,
+      });
+    }
+  }
+  return out;
+}
+
 export class ModelNameStore {
   private names = new Map<string, string>();
+  private modelList: ModelChoice[] = [];
   private timer?: NodeJS.Timeout;
   /** 映射变化时回调（供 server 触发 session_list 重推） */
   onChange?: () => void;
@@ -61,15 +88,27 @@ export class ModelNameStore {
     } catch {
       return; // 文件缺失：保持现状（降级）
     }
-    const next = buildModelNameMap(content);
-    if (sameMap(this.names, next)) return;
-    this.names = next;
+    const nextNames = buildModelNameMap(content);
+    const nextList = buildModelList(content);
+    if (sameMap(this.names, nextNames) && listKey(this.modelList) === listKey(nextList)) return;
+    this.names = nextNames;
+    this.modelList = nextList;
     this.onChange?.();
   }
 
   /** 按 identifier 查权威名；无则 undefined（调用方回退 metadata.name） */
   get(identifier: string): string | undefined {
     return this.names.get(identifier);
+  }
+
+  /** 全量模型选项列表（供前端模型下拉 + thinking 档位） */
+  list(): ModelChoice[] {
+    return this.modelList;
+  }
+
+  /** 按 identifier 查模型选项（写路径匹配 UIA 选项用） */
+  getChoice(identifier: string): ModelChoice | undefined {
+    return this.modelList.find((m) => m.identifier === identifier);
   }
 
   start(): void {
@@ -87,4 +126,11 @@ function sameMap(a: Map<string, string>, b: Map<string, string>): boolean {
   if (a.size !== b.size) return false;
   for (const [k, v] of a) if (b.get(k) !== v) return false;
   return true;
+}
+
+/** 模型列表签名（identifier+name+effort），用于变更检测 */
+function listKey(list: ModelChoice[]): string {
+  return list
+    .map((m) => `${m.identifier}|${m.name}|${(m.supportsReasoningEffort ?? []).join(',')}`)
+    .join(';');
 }

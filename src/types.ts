@@ -16,13 +16,18 @@
 // VS Code 会话头（jsonl kind=0，仅取目录所需字段）
 // ============================================================
 
-/** kind=0 会话头（只读 createdAt / model，忽略其余） */
+/** kind=0 会话头（读 createdAt / model / mode / reasoningEffort，忽略其余） */
 export interface SessionHeader {
   version?: number;
   creationDate?: number;
   sessionId?: string;
   inputState?: {
-    selectedModel?: { identifier?: string; metadata?: { name?: string } };
+    mode?: { id?: string; kind?: string };
+    selectedModel?: {
+      identifier?: string;
+      metadata?: { name?: string };
+      modelConfiguration?: { reasoningEffort?: string };
+    };
   };
 }
 
@@ -30,6 +35,7 @@ export interface SessionHeader {
 export interface SelectedModelUpdate {
   identifier?: string;
   metadata?: { name?: string };
+  modelConfiguration?: { reasoningEffort?: string };
 }
 
 /** 一行原始 jsonl 记录 */
@@ -146,6 +152,10 @@ export interface SessionFullState {
   sessionId: string;
   createdAt: number;
   model?: string;
+  /** Agent 模式（jsonl inputState.mode.kind，如 "agent"） */
+  mode?: string;
+  /** 思考程度（reasoningEffort：low/medium/xhigh） */
+  thinkingLevel?: string;
   lastActivity: number;
   /** 会话标题（Copilot 生成，来自 state.vscdb；读不到时前端回退 sessionId 前缀） */
   title?: string;
@@ -170,6 +180,8 @@ export type BridgeEvent =
       sessionId: string;
       createdAt: number;
       model?: string;
+      mode?: string;
+      thinkingLevel?: string;
       lastActivity: number;
       title?: string;
       requests: RequestState[];
@@ -179,6 +191,8 @@ export type BridgeEvent =
       sessionId: string;
       createdAt: number;
       model?: string;
+      mode?: string;
+      thinkingLevel?: string;
       project?: string;
     }
   | {
@@ -234,16 +248,37 @@ export type BridgeEvent =
       error?: string;
     }
   | {
+      /** 模型列表（chatLanguageModels.json，供前端模型下拉 + thinking 档位） */
+      type: 'model_list';
+      models: ModelChoice[];
+    }
+  | {
       /** 解析/归属错误（如 systemTail 解析失败）：前端展示 + 后端已记日志 */
       type: 'error';
       message: string;
       requestId?: string;
     };
 
+/** 模型选项（chatLanguageModels.json 注册表，供前端模型下拉 + 写路径匹配） */
+export interface ModelChoice {
+  /** vendor/providerName/modelId（如 customendpoint/Heimdall/Qwen3.8-27B） */
+  identifier: string;
+  /** 注册表展示名（如 "Qwen 3.8 27B DEV"） */
+  name: string;
+  /** 支持的思考程度（如 ["low","medium","xhigh"]） */
+  supportsReasoningEffort?: string[];
+}
+
 export interface SessionSummary {
   sessionId: string;
   lastActivity: number;
   model?: string;
+  /** 模型 identifier（写路径匹配 UIA 选项用） */
+  modelIdentifier?: string;
+  /** Agent 模式（jsonl inputState.mode.kind，如 "agent"） */
+  mode?: string;
+  /** 思考程度（reasoningEffort：low/medium/xhigh） */
+  thinkingLevel?: string;
   requestCount: number;
   /** 项目名（workspace.json 解析） */
   project?: string;

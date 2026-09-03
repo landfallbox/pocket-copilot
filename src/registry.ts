@@ -70,6 +70,10 @@ interface SessionState {
   model?: string;
   /** 模型 identifier（vendor/provider/modelId，用于查注册表权威名） */
   modelIdentifier?: string;
+  /** Agent 模式（jsonl inputState.mode.kind，如 "agent"） */
+  mode?: string;
+  /** 思考程度（reasoningEffort：low/medium/xhigh） */
+  thinkingLevel?: string;
   project?: string;
   lastActivity: number;
   announced: boolean;
@@ -156,20 +160,43 @@ export class Registry {
   // jsonl 侧：只读会话目录
   // ============================================================
 
-  /** 处理一条 jsonl 记录：会话头（kind=0）+ selectedModel 更新（kind=1），其余忽略 */
+  /** 处理一条 jsonl 记录：会话头（kind=0）+ inputState 增量（kind=1），其余忽略 */
   onJsonl(sessionId: string, rec: RawRecord, mtimeMs: number): void {
     const s = this.state(sessionId);
-    let modelChanged = false;
+    let changed = false;
     if (rec.kind === 0) {
       const h = rec.v as SessionHeader | undefined;
       if (h?.creationDate) s.createdAt = h.creationDate;
       const m = h?.inputState?.selectedModel;
-      if (m) modelChanged = this.applyModel(s, m);
+      if (m) changed = this.applyModel(s, m) || changed;
+      // 会话头快照：Agent 模式 + 思考程度（selectedModel.modelConfiguration）
+      const mode = h?.inputState?.mode;
+      if (mode?.kind && s.mode !== mode.kind) {
+        s.mode = mode.kind;
+        changed = true;
+      }
+      const effort = m?.modelConfiguration?.reasoningEffort;
+      if (effort && s.thinkingLevel !== effort) {
+        s.thinkingLevel = effort;
+        changed = true;
+      }
     } else if (rec.kind === 1) {
-      // 会话中切换模型：kind=1 k=["inputState","selectedModel"] 覆盖会话头快照
+      // 会话中切换：selectedModel / mode / modelConfiguration 覆盖会话头快照
       const k = rec.k ?? [];
       if (k[0] === 'inputState' && k[1] === 'selectedModel') {
-        modelChanged = this.applyModel(s, rec.v as SelectedModelUpdate);
+        changed = this.applyModel(s, rec.v as SelectedModelUpdate) || changed;
+      } else if (k[0] === 'inputState' && k[1] === 'mode') {
+        const mode = rec.v as { kind?: string } | undefined;
+        if (mode?.kind && s.mode !== mode.kind) {
+          s.mode = mode.kind;
+          changed = true;
+        }
+      } else if (k[0] === 'inputState' && k[1] === 'modelConfiguration') {
+        const cfg = rec.v as { reasoningEffort?: string } | undefined;
+        if (cfg?.reasoningEffort && s.thinkingLevel !== cfg.reasoningEffort) {
+          s.thinkingLevel = cfg.reasoningEffort;
+          changed = true;
+        }
       }
     } else {
       return;
@@ -178,8 +205,8 @@ export class Registry {
     // 避免重放历史时所有会话都被标为"刚刚活跃"。
     s.lastActivity = mtimeMs;
     this.announce(s);
-    // 已 announce 的会话切换模型：重推 session_list（否则前端 model 不更新）
-    if (modelChanged && s.announced) {
+    // 已 announce 的会话切换模型/模式/思考程度：重推 session_list（否则前端不更新）
+    if (changed && s.announced) {
       this.emit({ type: 'session_list', sessions: this.summaries() });
     }
   }
@@ -405,6 +432,9 @@ export class Registry {
         sessionId: s.sessionId,
         lastActivity: s.lastActivity,
         model: this.resolveModel(s),
+        modelIdentifier: s.modelIdentifier,
+        mode: s.mode,
+        thinkingLevel: s.thinkingLevel,
         requestCount: s.order.length,
         project: s.project,
         title: this.titleOf?.(s.sessionId),
@@ -443,6 +473,8 @@ export class Registry {
       sessionId: s.sessionId,
       createdAt: s.createdAt,
       model: this.resolveModel(s),
+      mode: s.mode,
+      thinkingLevel: s.thinkingLevel,
       lastActivity: s.lastActivity,
       title: this.titleOf?.(s.sessionId),
       requests,
@@ -609,6 +641,8 @@ export class Registry {
       sessionId: s.sessionId,
       createdAt: s.createdAt,
       model: this.resolveModel(s),
+      mode: s.mode,
+      thinkingLevel: s.thinkingLevel,
       project: s.project,
     });
     this.emit({ type: 'session_list', sessions: this.summaries() });

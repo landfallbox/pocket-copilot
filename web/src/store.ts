@@ -29,9 +29,22 @@ export type RequestState = {
   items: Item[];
   done: boolean;
 };
+/** 模型选项（与后端 ModelChoice 同构） */
+export type ModelChoice = {
+  identifier: string;
+  name: string;
+  supportsReasoningEffort?: string[];
+};
+
 export type SessionState = {
   sessionId: string;
   model?: string;
+  /** 模型 identifier（写路径匹配 UIA 选项用） */
+  modelIdentifier?: string;
+  /** Agent 模式（agent/ask/plan） */
+  mode?: string;
+  /** 思考程度（low/medium/xhigh） */
+  thinkingLevel?: string;
   lastActivity: number;
   /** 项目名（用于侧边栏分组） */
   project?: string;
@@ -51,6 +64,14 @@ type DemoStore = {
   error: string | null;
   /** 写路径：发送中（send_message 已发出、send_result 未回执） */
   sending: boolean;
+  /** 模型列表（chatLanguageModels.json，前端模型下拉 + thinking 档位） */
+  modelList: ModelChoice[];
+  /** 移动端当前选择（发消息时发给后端改 PC 端）：跟随激活会话，用户可改 */
+  selMode?: string;
+  selModelId?: string;
+  selThinking?: string;
+  /** 用户是否手动改过当前会话的选择（true 时不跟随后端会话值） */
+  selDirty: boolean;
 };
 
 export const useDemoStore = create<DemoStore>(() => ({
@@ -60,6 +81,11 @@ export const useDemoStore = create<DemoStore>(() => ({
   version: 0,
   error: null,
   sending: false,
+  modelList: [],
+  selMode: undefined,
+  selModelId: undefined,
+  selThinking: undefined,
+  selDirty: false,
 }));
 
 const bump = () => useDemoStore.setState((s) => ({ version: s.version + 1 }));
@@ -90,6 +116,11 @@ function handleEvent(e: Record<string, any>) {
     return;
   }
 
+  if (e.type === 'model_list') {
+    useDemoStore.setState({ modelList: e.models ?? [] });
+    return;
+  }
+
   if (e.type === 'send_result') {
     // 写路径回执：成功时消息会经 jsonl/heimdall 读路径自然回流，无需本地插入
     if (!e.ok) {
@@ -108,6 +139,9 @@ function handleEvent(e: Record<string, any>) {
       const sess = ensureSession(sum.sessionId);
       sess.lastActivity = sum.lastActivity ?? Date.now();
       if (sum.model) sess.model = sum.model;
+      if (sum.modelIdentifier) sess.modelIdentifier = sum.modelIdentifier;
+      if (sum.mode) sess.mode = sum.mode;
+      if (sum.thinkingLevel) sess.thinkingLevel = sum.thinkingLevel;
       if (sum.project) sess.project = sum.project;
       if (sum.title) sess.title = sum.title;
     }
@@ -118,8 +152,11 @@ function handleEvent(e: Record<string, any>) {
         (a, b) => b.lastActivity - a.lastActivity,
       )[0];
       useDemoStore.setState({ activeSessionId: first.sessionId });
+      syncSelection(first.sessionId);
       ws?.send(JSON.stringify({ type: 'replay', sessionId: first.sessionId }));
     }
+    // 激活会话三值更新：未手动改过则跟随 PC 端
+    syncSelIfClean();
     bump();
     return;
   }
@@ -127,6 +164,9 @@ function handleEvent(e: Record<string, any>) {
   if (e.type === 'replay') {
     const sess = ensureSession(e.sessionId);
     if (e.model) sess.model = e.model;
+    if (e.modelIdentifier) sess.modelIdentifier = e.modelIdentifier;
+    if (e.mode) sess.mode = e.mode;
+    if (e.thinkingLevel) sess.thinkingLevel = e.thinkingLevel;
     if (e.title) sess.title = e.title;
     sess.lastActivity = e.lastActivity ?? Date.now();
     sess.requests = new Map();
@@ -135,6 +175,7 @@ function handleEvent(e: Record<string, any>) {
       sess.requests.set(req.requestId, req);
       sess.order.push(req.requestId);
     }
+    syncSelIfClean();
     bump();
     return;
   }
@@ -142,7 +183,10 @@ function handleEvent(e: Record<string, any>) {
   if (e.type === 'session') {
     const sess = ensureSession(e.sessionId);
     if (e.model) sess.model = e.model;
+    if (e.mode) sess.mode = e.mode;
+    if (e.thinkingLevel) sess.thinkingLevel = e.thinkingLevel;
     if (e.title) sess.title = e.title;
+    syncSelIfClean();
     bump();
     return;
   }
@@ -202,23 +246,81 @@ export function startConnection() {
   connect();
 }
 
+/** 把指定会话的三值同步到移动端选择（切换会话时调用，重置 dirty） */
+function syncSelection(sessionId: string) {
+  const s = useDemoStore.getState();
+  const sess = s.sessions.get(sessionId);
+  if (!sess) return;
+  useDemoStore.setState({
+    selMode: sess.mode,
+    selModelId: sess.modelIdentifier,
+    selThinking: sess.thinkingLevel,
+    selDirty: false,
+  });
+}
+
+/** 激活会话三值更新且用户未手动改过 → 跟随 PC 端 */
+function syncSelIfClean() {
+  const s = useDemoStore.getState();
+  if (s.selDirty || !s.activeSessionId) return;
+  const sess = s.sessions.get(s.activeSessionId);
+  if (!sess) return;
+  useDemoStore.setState({
+    selMode: sess.mode,
+    selModelId: sess.modelIdentifier,
+    selThinking: sess.thinkingLevel,
+  });
+}
+
+/** 移动端手动选择 Agent 模式（发消息时生效） */
+export function pickMode(mode: string) {
+  useDemoStore.setState({ selMode: mode, selDirty: true });
+}
+
+/** 移动端手动选择模型（发消息时生效）；切换后若当前思考程度不在新模型支持范围则回退 */
+export function pickModel(identifier: string) {
+  const s = useDemoStore.getState();
+  const model = s.modelList.find((m) => m.identifier === identifier);
+  const efforts = model?.supportsReasoningEffort ?? [];
+  let thinking = s.selThinking;
+  if (efforts.length > 0 && thinking && !efforts.includes(thinking)) {
+    thinking = efforts.includes('medium') ? 'medium' : efforts[0];
+  }
+  useDemoStore.setState({ selModelId: identifier, selThinking: thinking, selDirty: true });
+}
+
+/** 移动端手动选择思考程度（发消息时生效） */
+export function pickThinking(level: string) {
+  useDemoStore.setState({ selThinking: level, selDirty: true });
+}
+
 /** 切换会话：设置激活 id 并请求服务端 replay（重复点击同一会话不重发） */
 export function selectSession(sessionId: string) {
   const s = useDemoStore.getState();
   if (s.activeSessionId === sessionId) return;
   useDemoStore.setState({ activeSessionId: sessionId });
+  syncSelection(sessionId);
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'replay', sessionId }));
   }
 }
 
-/** 写路径：向当前激活会话发送消息（bridge 经 UIA 注入 VS Code） */
+/** 写路径：向当前激活会话发送消息（bridge 经 UIA 注入 VS Code + 改选中值） */
 export function sendMessage(text: string) {
   const s = useDemoStore.getState();
   const id = s.activeSessionId;
   if (!id || s.sending || ws?.readyState !== WebSocket.OPEN) return;
   useDemoStore.setState({ sending: true, error: null });
-  ws.send(JSON.stringify({ type: 'send_message', sessionId: id, text }));
+  ws.send(
+    JSON.stringify({
+      type: 'send_message',
+      sessionId: id,
+      text,
+      mode: s.selMode,
+      modelIdentifier: s.selModelId,
+      thinkingLevel: s.selThinking,
+    }),
+  );
 }
 
 function connect() {

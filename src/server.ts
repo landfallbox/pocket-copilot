@@ -18,7 +18,7 @@ const NODE_MODULES = path.resolve(
 import { SessionTailer } from './tailer.js';
 import { HeimdallTailer } from './heimdall-tailer.js';
 import { Registry } from './registry.js';
-import { injectMessage } from './inject.js';
+import { injectMessage, type Selection } from './inject.js';
 import { SessionTitleStore } from './session-titles.js';
 import { ModelNameStore } from './model-name.js';
 import { buildProjectNameMap, workspaceHashOf } from './project-name.js';
@@ -47,10 +47,13 @@ titleStore.onChange = () => {
 };
 registry.setTitleProvider((sid) => titleStore.get(sid));
 
-// 模型权威名源（chatLanguageModels.json，独立可降级）：注册表变化时重推 session_list
+// 模型权威名源（chatLanguageModels.json，独立可降级）：注册表变化时重推 session_list + model_list
 const modelNameStore = new ModelNameStore();
 modelNameStore.onChange = () => {
-  if (clients.size > 0) broadcast({ type: 'session_list', sessions: registry.summaries() });
+  if (clients.size > 0) {
+    broadcast({ type: 'session_list', sessions: registry.summaries() });
+    broadcast({ type: 'model_list', models: modelNameStore.list() });
+  }
 };
 registry.setModelProvider((id) => modelNameStore.get(id));
 
@@ -76,10 +79,22 @@ const tailer = new SessionTailer(WORKSPACE_STORAGE_ROOT, {
  * 前置校验：会话须已知（registry 有）+ 有项目名（窗口标题匹配）+ 有标题（会话切换匹配）。
  * 结果只回给发起方（send_result），不广播。
  */
+/** 思考程度 → UIA 选项标签（jsonl 用 xhigh，UIA 显示 "Extra High"） */
+const THINKING_UIA: Record<string, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra High',
+  max: 'Max',
+};
+
 async function handleSendMessage(
   ws: WebSocket,
   sessionId: string,
   text: string,
+  mode?: string,
+  modelIdentifier?: string,
+  thinkingLevel?: string,
 ): Promise<void> {
   const reply = (ok: boolean, error?: string) => {
     if (ws.readyState === WebSocket.OPEN) {
@@ -101,7 +116,18 @@ async function handleSendMessage(
     reply(false, '消息为空');
     return;
   }
-  const result = await injectMessage(project, title, textTrimmed);
+  // 选中值 → UIA 选项标签：mode 取 kind；模型 identifier → 显示名；思考程度映射
+  const selection: Selection = {};
+  if (mode) selection.agent = mode;
+  if (modelIdentifier) {
+    const name = modelNameStore.getChoice(modelIdentifier)?.name;
+    if (name) selection.model = name;
+  }
+  if (thinkingLevel) {
+    const t = THINKING_UIA[thinkingLevel] ?? thinkingLevel;
+    if (t) selection.thinking = t;
+  }
+  const result = await injectMessage(project, title, textTrimmed, selection);
   reply(result.ok, result.error);
 }
 
@@ -171,8 +197,17 @@ wss.on('connection', (ws) => {
       withRecorder({ type: 'hello', sessions: registry.summaries() }),
     ),
   );
+  // 模型列表（前端模型下拉 + thinking 档位）
+  ws.send(JSON.stringify({ type: 'model_list', models: modelNameStore.list() }));
   ws.on('message', (buf) => {
-    let msg: { type?: string; sessionId?: string; text?: string };
+    let msg: {
+      type?: string;
+      sessionId?: string;
+      text?: string;
+      mode?: string;
+      modelIdentifier?: string;
+      thinkingLevel?: string;
+    };
     try {
       msg = JSON.parse(buf.toString('utf8'));
     } catch {
@@ -188,7 +223,14 @@ wss.on('connection', (ws) => {
       })();
     } else if (msg.type === 'send_message' && msg.sessionId && msg.text) {
       // 写路径：UIA 注入 VS Code（异步，结果经 send_result 回执给发起方）
-      void handleSendMessage(ws, msg.sessionId, msg.text);
+      void handleSendMessage(
+        ws,
+        msg.sessionId,
+        msg.text,
+        msg.mode,
+        msg.modelIdentifier,
+        msg.thinkingLevel,
+      );
     }
   });
   ws.on('close', () => clients.delete(ws));
