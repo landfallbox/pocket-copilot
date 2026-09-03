@@ -241,9 +241,10 @@ export type BridgeEvent =
       items: Item[];
     }
   | {
-      /** 写路径发送结果（send_message 的回执，仅发给发起方） */
+      /** 写路径发送结果（send_message / create_and_send 的回执，仅发给发起方） */
       type: 'send_result';
-      sessionId: string;
+      /** create_and_send 时新会话尚未建立，无 sessionId */
+      sessionId?: string;
       ok: boolean;
       error?: string;
     }

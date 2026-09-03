@@ -72,6 +72,12 @@ type DemoStore = {
   selThinking?: string;
   /** 用户是否手动改过当前会话的选择（true 时不跟随后端会话值） */
   selDirty: boolean;
+  /** 新建会话草稿：非 null 时处于 draft 模式（纯前端，未触发 PC 操作） */
+  draftProject: string | null;
+  /** draft 模式下的乐观用户消息（发送后到 session_list 带回前的过渡显示） */
+  draftMessages: Array<{ id: string; role: 'user'; text: string }>;
+  /** create_and_send 成功后等待 session_list 带回新会话（保留旧会话视图避免闪空） */
+  awaitingNewSession: boolean;
 };
 
 export const useDemoStore = create<DemoStore>(() => ({
@@ -86,6 +92,9 @@ export const useDemoStore = create<DemoStore>(() => ({
   selModelId: undefined,
   selThinking: undefined,
   selDirty: false,
+  draftProject: null,
+  draftMessages: [],
+  awaitingNewSession: false,
 }));
 
 const bump = () => useDemoStore.setState((s) => ({ version: s.version + 1 }));
@@ -129,7 +138,17 @@ function handleEvent(e: Record<string, any>) {
         error: e.error ?? '发送失败',
       });
     } else {
-      useDemoStore.setState({ sending: false });
+      // 成功：保留 draft 视图（继续显示用户消息），等 session_list 带回新会话再切换
+      const s = useDemoStore.getState();
+      if (s.draftProject) {
+        useDemoStore.setState({
+          sending: false,
+          awaitingNewSession: true,
+        });
+        bump();
+      } else {
+        useDemoStore.setState({ sending: false });
+      }
     }
     return;
   }
@@ -145,15 +164,34 @@ function handleEvent(e: Record<string, any>) {
       if (sum.project) sess.project = sum.project;
       if (sum.title) sess.title = sum.title;
     }
-    // 自动选中最近活跃的会话
+    // 自动选中最近活跃的会话（含 awaitingNewSession 时切换到新会话）
     const s2 = useDemoStore.getState();
-    if (!s2.activeSessionId && s2.sessions.size > 0) {
+    const isAwaiting = s2.awaitingNewSession;
+    const shouldSwitch = !s2.activeSessionId || isAwaiting;
+    if (shouldSwitch && s2.sessions.size > 0) {
       const first = [...s2.sessions.values()].sort(
         (a, b) => b.lastActivity - a.lastActivity,
       )[0];
-      useDemoStore.setState({ activeSessionId: first.sessionId });
-      syncSelection(first.sessionId);
-      ws?.send(JSON.stringify({ type: 'replay', sessionId: first.sessionId }));
+      // awaitingNewSession 时要求新会话 id 不同于当前（否则说明新会话还没出现，继续等）
+      if (isAwaiting && first.sessionId === s2.activeSessionId) {
+        // 新会话尚未出现在列表中，保持等待
+      } else {
+        useDemoStore.setState({
+          activeSessionId: first.sessionId,
+          awaitingNewSession: false,
+          // 切到新会话时清 draft（新会话已接管视图）
+          draftProject: null,
+          draftMessages: [],
+        });
+        syncSelection(first.sessionId);
+        // awaitingNewSession 切换：新会话数据正经 broadcast 流式到达（user_message/chunk/
+        // request_done 已按序广播给所有客户端，前端对任意会话都处理）。此时发 replay 会用
+        // fullState 重置本地流式状态，导致首条回复"一次性全出来"而非流式。
+        // 仅初始 auto-select（!activeSessionId，数据不在本地）才需 replay 拉全量。
+        if (!isAwaiting) {
+          ws?.send(JSON.stringify({ type: 'replay', sessionId: first.sessionId }));
+        }
+      }
     }
     // 激活会话三值更新：未手动改过则跟随 PC 端
     syncSelIfClean();
@@ -294,9 +332,18 @@ export function pickThinking(level: string) {
   useDemoStore.setState({ selThinking: level, selDirty: true });
 }
 
-/** 切换会话：设置激活 id 并请求服务端 replay（重复点击同一会话不重发） */
+/** 切换会话：设置激活 id 并请求服务端 replay（重复点击同一会话不重发）；切走时清 draft（放弃新建） */
 export function selectSession(sessionId: string) {
   const s = useDemoStore.getState();
+  // 切到已有会话 = 放弃当前新建草稿 + 取消等待新会话（用户手动选择优先）
+  if (s.draftProject || s.awaitingNewSession) {
+    useDemoStore.setState({
+      draftProject: null,
+      draftMessages: [],
+      awaitingNewSession: false,
+    });
+    bump();
+  }
   if (s.activeSessionId === sessionId) return;
   useDemoStore.setState({ activeSessionId: sessionId });
   syncSelection(sessionId);
@@ -305,12 +352,49 @@ export function selectSession(sessionId: string) {
   }
 }
 
-/** 写路径：向当前激活会话发送消息（bridge 经 UIA 注入 VS Code + 改选中值） */
+/** 进入新建会话草稿（纯前端，不触发 PC 操作；首条消息发送时才真正建会话） */
+export function startDraft(project: string) {
+  useDemoStore.setState({ draftProject: project, draftMessages: [] });
+  bump();
+}
+
+/** 退出新建会话草稿（切到已有会话 / 发送成功后调用） */
+export function clearDraft() {
+  const s = useDemoStore.getState();
+  if (!s.draftProject) return;
+  useDemoStore.setState({ draftProject: null, draftMessages: [] });
+  bump();
+}
+
+/**
+ * 写路径：发送消息。
+ * - draft 模式：发 create_and_send（bridge 经 UIA 点 New Chat 建会话 + 注入首条）
+ * - 正常模式：发 send_message（bridge 经 UIA 切会话 + 注入）
+ */
 export function sendMessage(text: string) {
   const s = useDemoStore.getState();
-  const id = s.activeSessionId;
-  if (!id || s.sending || ws?.readyState !== WebSocket.OPEN) return;
+  if (s.sending || ws?.readyState !== WebSocket.OPEN) return;
   useDemoStore.setState({ sending: true, error: null });
+  if (s.draftProject) {
+    // 新建会话：首条消息触发 PC 建会话
+    useDemoStore.setState({
+      draftMessages: [{ id: 'draft-user', role: 'user', text }],
+    });
+    bump();
+    ws.send(
+      JSON.stringify({
+        type: 'create_and_send',
+        project: s.draftProject,
+        text,
+        mode: s.selMode,
+        modelIdentifier: s.selModelId,
+        thinkingLevel: s.selThinking,
+      }),
+    );
+    return;
+  }
+  const id = s.activeSessionId;
+  if (!id) return;
   ws.send(
     JSON.stringify({
       type: 'send_message',

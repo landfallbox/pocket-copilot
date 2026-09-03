@@ -30,11 +30,13 @@ import {
   CodeRegular as CodeIcon,
   NavigationRegular as MenuIcon,
   ChatRegular as ChatIcon,
+  AddRegular as AddIcon,
 } from '@fluentui/react-icons';
 import {
   useDemoStore,
   startConnection,
   selectSession,
+  startDraft,
   sendMessage,
   pickMode,
   pickModel,
@@ -438,7 +440,13 @@ const emptyStyles = makeStyles({
 });
 
 /** 空状态：居中图标 + 引导文案（模仿移动端"开始对话"） */
-function EmptyState({ hasSession }: { hasSession: boolean }) {
+function EmptyState({
+  hasSession,
+  isDraft,
+}: {
+  hasSession: boolean;
+  isDraft?: boolean;
+}) {
   const styles = emptyStyles();
   return (
     <div className={styles.wrap}>
@@ -446,12 +454,16 @@ function EmptyState({ hasSession }: { hasSession: boolean }) {
         <ChatIcon fontSize={28} />
       </div>
       <div className={styles.title}>
-        {hasSession ? '此会话暂无消息' : '开始一段对话'}
+        {isDraft ? '新建会话' : hasSession ? '此会话暂无消息' : '开始一段对话'}
       </div>
-      {!hasSession && (
-        <div className={styles.sub}>
-          从左侧选择一个会话，或直接输入消息发送到 VS Code
-        </div>
+      {isDraft ? (
+        <div className={styles.sub}>输入首条消息，将在 PC 端创建新会话</div>
+      ) : (
+        !hasSession && (
+          <div className={styles.sub}>
+            从左侧选择一个会话，或直接输入消息发送到 VS Code
+          </div>
+        )
       )}
     </div>
   );
@@ -461,10 +473,12 @@ function MessageList({
   messages,
   running,
   hasSession,
+  isDraft,
 }: {
   messages: Message[];
   running: boolean;
   hasSession: boolean;
+  isDraft?: boolean;
 }) {
   const styles = msgStyles();
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -476,7 +490,7 @@ function MessageList({
   return (
     <div className="flex-1 overflow-y-auto" style={{ padding: '16px 16px 8px' }}>
       {messages.length === 0 ? (
-        <EmptyState hasSession={hasSession} />
+        <EmptyState hasSession={hasSession} isDraft={isDraft} />
       ) : (
         <div style={{ maxWidth: '720px', margin: '0 auto' }}>
           {messages.map((m) =>
@@ -782,11 +796,17 @@ function InputFooter() {
   const sending = useDemoStore((s) => s.sending);
   const connected = useDemoStore((s) => s.connected);
   const activeSessionId = useDemoStore((s) => s.activeSessionId);
+  const isDraft = useDemoStore((s) => s.draftProject !== null);
 
-  const canSend = !!value.trim() && !sending && connected && !!activeSessionId;
+  const canSend =
+    !!value.trim() &&
+    !sending &&
+    connected &&
+    (!!activeSessionId || isDraft);
   const submit = () => {
     const text = value.trim();
-    if (!text || sending || !connected || !activeSessionId) return;
+    if (!text || sending || !connected || (!activeSessionId && !isDraft))
+      return;
     sendMessage(text);
     setValue('');
   };
@@ -805,9 +825,13 @@ function InputFooter() {
             }
           }}
           placeholder={
-            activeSessionId ? '询问 Copilot…' : '选择会话后可发送'
+            isDraft
+              ? '输入首条消息以创建会话…'
+              : activeSessionId
+                ? '询问 Copilot…'
+                : '选择会话后可发送'
           }
-          disabled={!activeSessionId}
+          disabled={!activeSessionId && !isDraft}
           rows={1}
         />
         <div className={styles.bottomRow}>
@@ -824,7 +848,9 @@ function InputFooter() {
       </div>
       {sending && (
         <div className={styles.hint}>
-          正在注入 VS Code（激活窗口 → 切换会话 → 粘贴发送）…
+          {isDraft
+            ? '正在新建会话并注入（激活窗口 → 新建 → 粘贴发送）…'
+            : '正在注入 VS Code（激活窗口 → 切换会话 → 粘贴发送）…'}
         </div>
       )}
     </div>
@@ -1187,6 +1213,8 @@ export default function App() {
   const version = useDemoStore((s) => s.version);
   const activeSessionId = useDemoStore((s) => s.activeSessionId);
   const error = useDemoStore((s) => s.error);
+  const isDraft = useDemoStore((s) => s.draftProject !== null);
+  const draftProject = useDemoStore((s) => s.draftProject);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [titleMenuOpen, setTitleMenuOpen] = useState(false);
 
@@ -1204,6 +1232,14 @@ export default function App() {
   const { messages, running, activeTitle } = useMemo(() => {
     void version;
     const s = useDemoStore.getState();
+    // draft 模式：显示乐观用户消息（首条发送后的过渡）
+    if (s.draftProject) {
+      return {
+        messages: s.draftMessages as Message[],
+        running: false,
+        activeTitle: s.draftProject,
+      };
+    }
     const sess = activeSessionId ? s.sessions.get(activeSessionId) : undefined;
     if (!sess)
       return { messages: [] as Message[], running: false, activeTitle: '' };
@@ -1242,6 +1278,20 @@ export default function App() {
     setTitleMenuOpen(false);
   };
 
+  // 标题显示：draft 模式显示项目名（新会话标题生成后会替换）
+  const displayTitle = isDraft
+    ? draftProject
+    : activeTitle || (connected ? 'Copilot Bridge' : '连接中…');
+  // 标题下拉：draft 模式恒可用（切到已有会话 = 放弃新建）
+  const titleEnabled = isDraft || titleMenuList.length > 1;
+
+  // 新建会话：纯前端进入 draft 模式（首条消息发送时才真正触发 PC 建会话）
+  const handleNewSession = () => {
+    if (!activeProject || isDraft) return;
+    startDraft(activeProject);
+    setTitleMenuOpen(false);
+  };
+
   return (
     <FluentProvider theme={baseTheme} style={{ height: '100%' }}>
       <div className={appStyles_.root}>
@@ -1257,17 +1307,15 @@ export default function App() {
             <button
               className={appStyles_.title}
               onClick={() => setTitleMenuOpen((o) => !o)}
-              disabled={titleMenuList.length <= 1}
-              style={titleMenuList.length <= 1 ? { cursor: 'default' } : undefined}
+              disabled={!titleEnabled}
+              style={!titleEnabled ? { cursor: 'default' } : undefined}
               aria-label="切换会话"
-              title={titleMenuList.length > 1 ? '切换同项目会话' : undefined}
+              title={titleEnabled ? '切换同项目会话' : undefined}
             >
-              <span className={appStyles_.titleText}>
-                {activeTitle || (connected ? 'Copilot Bridge' : '连接中…')}
-              </span>
-              {titleMenuList.length > 1 && <ChevronDownIcon fontSize={14} />}
+              <span className={appStyles_.titleText}>{displayTitle}</span>
+              {titleEnabled && <ChevronDownIcon fontSize={14} />}
             </button>
-            {titleMenuOpen && titleMenuList.length > 1 && (
+            {titleMenuOpen && titleEnabled && (
               <div className={appStyles_.titleMenu}>
                 {titleMenuList.map((s) => (
                   <button
@@ -1285,6 +1333,20 @@ export default function App() {
               </div>
             )}
           </div>
+          <button
+            className={appStyles_.iconBtn}
+            onClick={handleNewSession}
+            disabled={isDraft || !activeProject}
+            style={
+              isDraft || !activeProject
+                ? { opacity: 0.4, cursor: 'default' }
+                : undefined
+            }
+            aria-label="新建会话"
+            title="新建会话"
+          >
+            <AddIcon fontSize={18} />
+          </button>
           {/* 点击外部关闭标题下拉 */}
           {titleMenuOpen && (
             <div
@@ -1316,6 +1378,7 @@ export default function App() {
             messages={messages}
             running={running}
             hasSession={!!activeSessionId}
+            isDraft={isDraft}
           />
           <InputFooter />
         </div>

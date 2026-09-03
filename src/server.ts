@@ -18,7 +18,7 @@ const NODE_MODULES = path.resolve(
 import { SessionTailer } from './tailer.js';
 import { HeimdallTailer } from './heimdall-tailer.js';
 import { Registry } from './registry.js';
-import { injectMessage, type Selection } from './inject.js';
+import { injectMessage, createAndInject, type Selection } from './inject.js';
 import { SessionTitleStore } from './session-titles.js';
 import { ModelNameStore } from './model-name.js';
 import { buildProjectNameMap, workspaceHashOf } from './project-name.js';
@@ -131,6 +131,43 @@ async function handleSendMessage(
   reply(result.ok, result.error);
 }
 
+/**
+ * 新建会话写路径：点 PC 端 New Chat 建会话 + 注入首条消息。
+ * 不依赖会话标题（新会话尚无标题），只需项目名定位窗口。
+ * 结果只回给发起方（send_result，无 sessionId）。
+ */
+async function handleCreateAndSend(
+  ws: WebSocket,
+  project: string,
+  text: string,
+  mode?: string,
+  modelIdentifier?: string,
+  thinkingLevel?: string,
+): Promise<void> {
+  const reply = (ok: boolean, error?: string) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'send_result', ok, ...(error ? { error } : {}) }));
+    }
+  };
+  const textTrimmed = text.trim();
+  if (!textTrimmed) {
+    reply(false, '消息为空');
+    return;
+  }
+  const selection: Selection = {};
+  if (mode) selection.agent = mode;
+  if (modelIdentifier) {
+    const name = modelNameStore.getChoice(modelIdentifier)?.name;
+    if (name) selection.model = name;
+  }
+  if (thinkingLevel) {
+    const t = THINKING_UIA[thinkingLevel] ?? thinkingLevel;
+    if (t) selection.thinking = t;
+  }
+  const result = await createAndInject(project, textTrimmed, selection);
+  reply(result.ok, result.error);
+}
+
 /** 给 hello/session_list 附上记录源健康状态（区分"模型没输出"与"链路断了"） */
 function withRecorder(e: BridgeEvent): BridgeEvent {
   if (e.type === 'hello' || e.type === 'session_list') {
@@ -204,6 +241,7 @@ wss.on('connection', (ws) => {
       type?: string;
       sessionId?: string;
       text?: string;
+      project?: string;
       mode?: string;
       modelIdentifier?: string;
       thinkingLevel?: string;
@@ -226,6 +264,16 @@ wss.on('connection', (ws) => {
       void handleSendMessage(
         ws,
         msg.sessionId,
+        msg.text,
+        msg.mode,
+        msg.modelIdentifier,
+        msg.thinkingLevel,
+      );
+    } else if (msg.type === 'create_and_send' && msg.project && msg.text) {
+      // 新建会话写路径：点 New Chat 建会话 + 注入首条（异步，结果经 send_result 回执）
+      void handleCreateAndSend(
+        ws,
+        msg.project,
         msg.text,
         msg.mode,
         msg.modelIdentifier,

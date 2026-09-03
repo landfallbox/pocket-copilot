@@ -50,11 +50,33 @@ export async function injectMessage(
     selection?.agent ?? '',
     selection?.model ?? '',
     selection?.thinking ?? '',
+    false,
   );
   return runPowerShell(script);
 }
 
-/** 构建 PowerShell 脚本 */
+/**
+ * 新建会话并注入首条消息：激活窗口 → 点 New Chat 按钮 → 改选中值 → 粘贴首条 → Enter。
+ * 用于 bridge 端“新建会话”：首条消息本身触发 VS Code 建会话，不依赖会话标题（新会话尚无标题）。
+ */
+export async function createAndInject(
+  project: string,
+  message: string,
+  selection?: Selection,
+): Promise<InjectResult> {
+  const script = buildScript(
+    project,
+    '',
+    message,
+    selection?.agent ?? '',
+    selection?.model ?? '',
+    selection?.thinking ?? '',
+    true,
+  );
+  return runPowerShell(script);
+}
+
+/** 构建 PowerShell 脚本（createNew=true 时点 New Chat 建会话，否则按标题切换会话） */
 function buildScript(
   project: string,
   sessionTitle: string,
@@ -62,6 +84,7 @@ function buildScript(
   agent: string,
   model: string,
   thinking: string,
+  createNew: boolean,
 ): string {
   const esc = (s: string) => s.replace(/'/g, "''");
   const proj = esc(project);
@@ -94,6 +117,7 @@ $message = '${msg}'
 $agent = '${agentEsc}'
 $model = '${modelEsc}'
 $thinking = '${thinkEsc}'
+$createNew = ${createNew ? '$true' : '$false'}
 
 # 1. 找 VS Code 窗口
 $root = [System.Windows.Automation.AutomationElement]::RootElement
@@ -115,7 +139,29 @@ $hwnd = $win.Current.NativeWindowHandle
 [void][Win32inj]::SetForegroundWindow($hwnd)
 Start-Sleep -Milliseconds 500
 
-# 3. 打开会话选择器并切换目标会话
+# 3. 新建会话（点 New Chat）或 打开会话选择器切换目标会话
+if ($createNew) {
+  $newBtnCond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Button)
+  $newBtns = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $newBtnCond)
+  $newBtn = $null
+  foreach ($b in $newBtns) {
+    $nm = [string]$b.Current.Name
+    if ($nm -notlike 'New Chat*') { continue }
+    $r = $b.Current.BoundingRectangle
+    if ([double]::IsInfinity($r.X) -or [double]::IsInfinity($r.Y)) { continue }
+    if ($r.IsEmpty) { continue }
+    if ($nm -like 'New Chat (Ctrl+N)') { $newBtn = $b; break }
+    if ($null -eq $newBtn) { $newBtn = $b }
+  }
+  if ($null -eq $newBtn) {
+    Write-Output 'ERROR:NEWCHAT_NOT_FOUND'
+    exit 1
+  }
+  $newBtn.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+  Start-Sleep -Milliseconds 1000
+} else {
 $pickCond = New-Object System.Windows.Automation.PropertyCondition(
   [System.Windows.Automation.AutomationElement]::NameProperty, 'Pick Agent Session')
 $pick = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $pickCond)
@@ -151,6 +197,7 @@ if ($null -ne $pick) {
   }
   $target.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
   Start-Sleep -Milliseconds 800
+}
 }
 
 # 3.5 改选中值（Agent / 模型 / 思考程度）——锚定激活面板，坐标点击下拉
