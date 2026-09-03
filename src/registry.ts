@@ -266,47 +266,40 @@ export class Registry {
       return;
     }
 
-    // 区分“新的用户请求”与“agent 循环后续调用”：
-    // - 有 <userRequest> 标签 = 用户发起的新请求（可能重发）
-    // - 无标签 = agent 多轮循环中的后续模型调用（最后一条 user 消息是 tool result /
-    //   终端通知 / 压缩指令），应归并到当前活跃 turn，而非新建。
-    // 不能用 <userRequest> 过滤丢弃后续调用：那会丢掉最终回答的 chunk + request_end，
-    // 导致回答不完整 + turn 永不 done（一直 Working…）。
-    // 真正的非聊天流量（补全 / inline edit）无 sessionId，已被上面的 sessionId 检查丢弃。
-    const hasUserRequest = /<userRequest>[\s\S]*<\/userRequest>/.test(rec.lastUserText);
-
+    // 判别"新用户请求" vs "agent 循环后续调用"：
+    // 不能用 <userRequest> 标签内容判别——agent 后续调用的 lastUserText 可能含
+    // <userRequest> 标签（tool result 回显对话历史 / VS Code 重新包装），提取出的
+    // 文本是垃圾（commit message 片段等），据此新建 turn 会产生幽灵 turn。
+    //
+    // 可靠判别：VS Code 不允许 agent 运行中发新消息（输入框禁用），所以有活跃 turn
+    // （未 done + 时间连续）时，进来的调用一定是 agent 后续调用 → 归并。
+    // 无活跃 turn → 新用户请求 → 新建 turn（此时 lastUserText 必含真实用户输入）。
+    // 真正的非聊天流量（补全 / inline edit）无 sessionId，已被上面的检查丢弃。
     const s = this.state(sessionId);
     if (!s.model) s.model = rec.model;
 
-    if (hasUserRequest) {
-      // 新的用户请求：同 userText + 未 done + 时间连续 = 重发（复用 turn）；否则新建
-      const userText = extractUserRequest(rec.lastUserText);
-      const turn = this.matchTurn(s, userText, startTs, true) ?? this.createTurn(s, rec.requestId, userText, startTs);
-      this.calls.set(rec.requestId, { sessionId, turnId: turn.turnId });
+    const activeTurn = this.matchTurn(s, startTs);
+    if (activeTurn) {
+      // agent 循环后续调用：归并到当前活跃 turn
+      this.calls.set(rec.requestId, { sessionId, turnId: activeTurn.turnId });
     } else {
-      // agent 循环后续调用：归并到当前活跃 turn（未 done + 时间连续）；无活跃 turn 则丢弃（不建垃圾 turn）
-      const turn = this.matchTurn(s, '', startTs, false);
-      if (turn) this.calls.set(rec.requestId, { sessionId, turnId: turn.turnId });
+      // 新用户请求：创建新 turn
+      const userText = extractUserRequest(rec.lastUserText);
+      const turn = this.createTurn(s, rec.requestId, userText, startTs);
+      this.calls.set(rec.requestId, { sessionId, turnId: turn.turnId });
     }
   }
 
   /**
-   * 找当前活跃 turn：
-   * - hasUserRequest=true（新用户请求）：同 userText + 未 done + 时间连续（否则是新轮次）
-   * - hasUserRequest=false（agent 后续调用）：未 done + 时间连续即归并（不比较 userText，
-   *   因后续调用的 lastUserText 是 tool result，与原始 userText 不同）
+   * 找当前活跃 turn：未 done + 时间连续（TURN_GAP_MS 内）。
+   * 不比较 userText——agent 后续调用的 lastUserText 是 tool result，与原始 userText 不同。
+   * VS Code 不允许 agent 运行中发新消息，所以活跃 turn 内的调用一定是后续调用。
    */
-  private matchTurn(
-    s: SessionState,
-    userText: string,
-    startTs: number,
-    hasUserRequest: boolean,
-  ): TurnState | undefined {
+  private matchTurn(s: SessionState, startTs: number): TurnState | undefined {
     const id = s.lastActiveTurnId;
     if (!id) return undefined;
     const t = s.turns.get(id);
     if (!t || t.done) return undefined;
-    if (hasUserRequest && t.userText !== userText) return undefined;
     if (startTs - t.lastActivity > TURN_GAP_MS) return undefined;
     return t;
   }
@@ -537,18 +530,19 @@ export class Registry {
           if (!('systemTail' in rec)) continue;
           const info = parseSessionInfo(rec.systemTail);
           if (info.sessionId !== sessionId) continue;
-          if (!/<userRequest>[\s\S]*<\/userRequest>/.test(rec.lastUserText)) continue;
-          const userText = extractUserRequest(rec.lastUserText);
           const startTs = Date.parse(rec.time);
 
+          // 与 onStart 相同逻辑：有活跃 turn（未 done + 时间连续）→ 归并（agent 后续调用）
+          // 无活跃 turn → 新建（新用户请求）
           let turn: TurnState | undefined;
           if (lastActiveTurnId) {
             const last = turns.get(lastActiveTurnId);
-            if (last && !last.done && last.userText === userText && startTs - last.lastActivity < TURN_GAP_MS) {
+            if (last && !last.done && startTs - last.lastActivity < TURN_GAP_MS) {
               turn = last;
             }
           }
           if (!turn) {
+            const userText = extractUserRequest(rec.lastUserText);
             turn = {
               turnId: rec.requestId,
               sessionId,
