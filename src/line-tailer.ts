@@ -35,6 +35,8 @@ export class LineTailer<T> {
   private tracking = new Set<string>();
   private draining = new Set<string>();
   private drainQueued = new Set<string>();
+  /** 上次补扫新文件的时间（轮询周期性 scan，Windows 上 chokidar add 不可靠） */
+  private lastScan = 0;
   private opts: LineTailerOptions<T>;
   private root: string;
 
@@ -64,6 +66,13 @@ export class LineTailer<T> {
     const pollMs = this.opts.pollMs ?? 1000;
     this.pollTimer = setInterval(() => {
       for (const f of this.tracking) void this.drain(f);
+      // 周期性补扫新文件：chokidar add 在 Windows 上对新建 .jsonl 不可靠，
+      // 而轮询只 drain 已 track 文件，启动后才创建的文件会永远不被 track
+      // （表现为当天首条请求/新会话文件内容读不到）。5 秒补扫一次。
+      if (Date.now() - this.lastScan > 5000) {
+        this.lastScan = Date.now();
+        void this.scanNewFiles();
+      }
     }, pollMs);
     this.pollTimer.unref();
   }
@@ -71,6 +80,14 @@ export class LineTailer<T> {
   async stop(): Promise<void> {
     if (this.pollTimer) clearInterval(this.pollTimer);
     await this.watcher?.close();
+  }
+
+  /** 发现 scanFiles 返回但尚未跟踪的新文件并纳入（track 内部已防重） */
+  private async scanNewFiles(): Promise<void> {
+    const files = await this.opts.scanFiles();
+    for (const f of files) {
+      if (!this.tracking.has(f)) void this.track(f);
+    }
   }
 
   private async track(file: string): Promise<void> {

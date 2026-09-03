@@ -29,20 +29,24 @@ export class HeimdallTailer {
   ) {}
 
   async start(): Promise<void> {
-    let files: string[] = [];
-    try {
-      const entries = await fsp.readdir(HEIMDALL_REQUESTS_DIR, {
-        withFileTypes: true,
-      });
-      files = entries
-        .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
-        .map((e) => path.join(HEIMDALL_REQUESTS_DIR, e.name));
-    } catch {
-      // 目录不存在：requestLogging 未启用或 heimdall 未运行，空转
-    }
     this.tailer = new LineTailer<HeimdallRecord>(HEIMDALL_DATA_DIR, {
       pattern: path.join('requests', '*.jsonl'),
-      scanFiles: async () => files,
+      // 每次调用重新扫描：LineTailer 启动时 + 周期性补扫都靠它发现新文件，
+      // 不能返回启动时的一次性快照（否则启动后才创建的文件永远发现不了）。
+      scanFiles: async () => {
+        let out: string[] = [];
+        try {
+          const entries = await fsp.readdir(HEIMDALL_REQUESTS_DIR, {
+            withFileTypes: true,
+          });
+          out = entries
+            .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
+            .map((e) => path.join(HEIMDALL_REQUESTS_DIR, e.name));
+        } catch {
+          // 目录不存在：requestLogging 未启用或 heimdall 未运行，空转
+        }
+        return out;
+      },
       // heimdall chunk 是流式增量源，需低延迟：轮询 150ms（jsonl tailer 保持 1s）
       pollMs: 150,
       parseLine: (line) => {

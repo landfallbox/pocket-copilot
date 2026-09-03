@@ -261,6 +261,10 @@ Start-Sleep -Milliseconds 300
 Set-Clipboard -Value $saved
 
 Write-Output 'OK'
+# 强制退出：脚本加载了 System.Windows.Forms + UIA，主体跑完后进程不会自然退出
+# （WinForms 隐藏 message loop / COM 线程挂住），不退出则 node 侧 close 事件不触发，
+# 导致 30s 超时。error 路径已用 exit 1 正常退出，此处补正常路径。
+[Environment]::Exit(0)
 `;
 }
 
