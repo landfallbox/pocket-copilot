@@ -266,25 +266,47 @@ export class Registry {
       return;
     }
 
-    // 非聊天流量（补全 / inline edit）：无 <userRequest> 标签，丢弃
-    if (!/<userRequest>[\s\S]*<\/userRequest>/.test(rec.lastUserText)) return;
-    const userText = extractUserRequest(rec.lastUserText);
+    // 区分“新的用户请求”与“agent 循环后续调用”：
+    // - 有 <userRequest> 标签 = 用户发起的新请求（可能重发）
+    // - 无标签 = agent 多轮循环中的后续模型调用（最后一条 user 消息是 tool result /
+    //   终端通知 / 压缩指令），应归并到当前活跃 turn，而非新建。
+    // 不能用 <userRequest> 过滤丢弃后续调用：那会丢掉最终回答的 chunk + request_end，
+    // 导致回答不完整 + turn 永不 done（一直 Working…）。
+    // 真正的非聊天流量（补全 / inline edit）无 sessionId，已被上面的 sessionId 检查丢弃。
+    const hasUserRequest = /<userRequest>[\s\S]*<\/userRequest>/.test(rec.lastUserText);
 
     const s = this.state(sessionId);
     if (!s.model) s.model = rec.model;
 
-    // 同轮次后续模型调用复用当前 turn；否则新建
-    const turn = this.matchTurn(s, userText, startTs) ?? this.createTurn(s, rec.requestId, userText, startTs);
-    this.calls.set(rec.requestId, { sessionId, turnId: turn.turnId });
+    if (hasUserRequest) {
+      // 新的用户请求：同 userText + 未 done + 时间连续 = 重发（复用 turn）；否则新建
+      const userText = extractUserRequest(rec.lastUserText);
+      const turn = this.matchTurn(s, userText, startTs, true) ?? this.createTurn(s, rec.requestId, userText, startTs);
+      this.calls.set(rec.requestId, { sessionId, turnId: turn.turnId });
+    } else {
+      // agent 循环后续调用：归并到当前活跃 turn（未 done + 时间连续）；无活跃 turn 则丢弃（不建垃圾 turn）
+      const turn = this.matchTurn(s, '', startTs, false);
+      if (turn) this.calls.set(rec.requestId, { sessionId, turnId: turn.turnId });
+    }
   }
 
-  /** 找当前活跃 turn：同 userText + 未 done + 时间连续（否则是新轮次） */
-  private matchTurn(s: SessionState, userText: string, startTs: number): TurnState | undefined {
+  /**
+   * 找当前活跃 turn：
+   * - hasUserRequest=true（新用户请求）：同 userText + 未 done + 时间连续（否则是新轮次）
+   * - hasUserRequest=false（agent 后续调用）：未 done + 时间连续即归并（不比较 userText，
+   *   因后续调用的 lastUserText 是 tool result，与原始 userText 不同）
+   */
+  private matchTurn(
+    s: SessionState,
+    userText: string,
+    startTs: number,
+    hasUserRequest: boolean,
+  ): TurnState | undefined {
     const id = s.lastActiveTurnId;
     if (!id) return undefined;
     const t = s.turns.get(id);
     if (!t || t.done) return undefined;
-    if (t.userText !== userText) return undefined;
+    if (hasUserRequest && t.userText !== userText) return undefined;
     if (startTs - t.lastActivity > TURN_GAP_MS) return undefined;
     return t;
   }
