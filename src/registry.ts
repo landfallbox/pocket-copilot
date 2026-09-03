@@ -89,13 +89,19 @@ interface SessionState {
 
 /**
  * 从 heimdall `lastUserText`（VS Code 发给模型的完整 prompt）提取 `<userRequest>`
- * 标签内的纯用户输入。取最后一个块：真实输入总在 prompt 末尾，`<context>` 里可能
- * 回显含 `<userRequest>` 字面量的历史命令。无标签时回退全文。
+ * 标签内的纯用户输入。真实输入总在 prompt 末尾；`<context>` 里可能回显含
+ * `<userRequest>` 字面量的历史命令（且回显的标签可能无闭合）。
+ *
+ * 策略：定位最后一个 `<userRequest>` 开标签，取其到最近 `</userRequest>`（或字符串末尾）的内容。
+ * 不用正则全局配对——回显中的未闭合 `<userRequest>` 会与真实标签的 `</userRequest>` 错误配对。
  */
 function extractUserRequest(lastUserText: string): string {
-  const matches = [...lastUserText.matchAll(/<userRequest>([\s\S]*?)<\/userRequest>/g)];
-  if (!matches.length) return lastUserText;
-  return matches[matches.length - 1][1].trim();
+  const lastOpen = lastUserText.lastIndexOf('<userRequest>');
+  if (lastOpen === -1) return lastUserText;
+  const afterOpen = lastOpen + '<userRequest>'.length;
+  const lastClose = lastUserText.lastIndexOf('</userRequest>');
+  const end = lastClose > afterOpen ? lastClose : lastUserText.length;
+  return lastUserText.substring(afterOpen, end).trim();
 }
 
 /** 判断文本是否含实质内容（模型偶尔误发纯标点推理碎片，需过滤） */
