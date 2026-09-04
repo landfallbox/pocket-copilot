@@ -289,10 +289,37 @@ export class Registry {
       // agent 循环后续调用：归并到当前活跃 turn
       this.calls.set(rec.requestId, { sessionId, turnId: activeTurn.turnId });
     } else {
-      // 新用户请求：创建新 turn
+      // 新用户请求：创建新 turn。
+      // 孤儿收尾：此时会话内若仍有敞开 turn（以 tool_call 收尾、等归而未归），
+      // 它已不会再被归并——强制判 done，避免永久 Working。最坏情况（慢工具 >30s）
+      // 内容归属与现状一致（进新 turn），只是完成时刻晚于真实完成时刻。
+      this.forceCompleteOpenTurns(s, startTs);
       const userText = extractUserRequest(rec.lastUserText);
       const turn = this.createTurn(s, rec.requestId, userText, startTs);
       this.calls.set(rec.requestId, { sessionId, turnId: turn.turnId });
+    }
+  }
+
+  /**
+   * 孤儿收尾：把会话内所有未 done 的 turn 强制判 done 并 emit request_done。
+   * 在 request_start 到达且 matchTurn 未命中时调用——下一个事件已证明上一个
+   * agent run 结束（输入框重新可用）或本就无法归并，敞开 turn 不应无限等待。
+   */
+  private forceCompleteOpenTurns(s: SessionState, nowTs: number): void {
+    for (const id of s.order) {
+      const t = s.turns.get(id);
+      if (!t || t.done) continue;
+      t.done = true;
+      t.elapsedMs = nowTs - t.ts;
+      this.emit({
+        type: 'request_done',
+        sessionId: t.sessionId,
+        requestId: t.turnId,
+        elapsedMs: t.elapsedMs,
+        promptTokens: t.promptTokens,
+        completionTokens: t.completionTokens,
+        items: t.items,
+      });
     }
   }
 
@@ -548,6 +575,8 @@ export class Registry {
             }
           }
           if (!turn) {
+            // 孤儿收尾（与实时路径 onStart 一致）：此前敞开 turn 不会再被归并，判 done
+            for (const t of turns.values()) if (!t.done) t.done = true;
             const userText = extractUserRequest(rec.lastUserText);
             turn = {
               turnId: rec.requestId,
