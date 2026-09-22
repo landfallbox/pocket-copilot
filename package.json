@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "手机 PWA 远程查看/驱动 PC 上 VS Code 内置 Copilot 会话的桥接服务（Spike 1：读方向）",
+  "description": "手机 PWA 远程查看/驱动 PC 上 VS Code 内置 Copilot 会话的桥接服务（AHP 方案：薄服务，PWA 经 AHP 直连 agent host）",
   "scripts": {
     "dev": "tsx src/server.ts",
     "build": "npm --prefix web run build",
@@ -11,13 +11,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.0.0",
-    "@types/ws": "^8.18.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"
-  },
-  "dependencies": {
-    "chokidar": "^4.0.0",
-    "marked": "^16.0.0",
-    "ws": "^8.18.0"
   }
 }

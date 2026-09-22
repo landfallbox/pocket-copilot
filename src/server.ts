@@ -1,209 +1,112 @@
 import http from 'node:http';
+import net from 'node:net';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import fsp from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { WebSocketServer, WebSocket } from 'ws';
 import {
   HOST,
   PORT,
   WEB_ROOT,
-  WORKSPACE_STORAGE_ROOT,
+  AGENT_HOST_PORT,
+  readAgentHostToken,
 } from './config.js';
 
-const NODE_MODULES = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  'node_modules',
-);
-import { SessionTailer } from './tailer.js';
-import { HeimdallTailer } from './heimdall-tailer.js';
-import { Registry } from './registry.js';
-import { injectMessage, createAndInject, type Selection } from './inject.js';
-import { SessionTitleStore } from './session-titles.js';
-import { ModelNameStore } from './model-name.js';
-import { buildProjectNameMap, workspaceHashOf } from './project-name.js';
-import type { BridgeEvent } from './types.js';
+const pExecFile = promisify(execFile);
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
   '.ico': 'image/x-icon',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
-// 单一状态源：jsonl 只喂会话目录（哪些项目/会话），heimdall 喂请求 + 内容
-const registry = new Registry((e: BridgeEvent) => broadcast(withRecorder(e)));
-
-const heimdallTailer = new HeimdallTailer((rec) => registry.onHeimdall(rec));
-
-// 会话标题源（state.vscdb，独立可降级）：标题变化时重推 session_list
-const titleStore = new SessionTitleStore();
-titleStore.onChange = () => {
-  if (clients.size > 0) broadcast({ type: 'session_list', sessions: registry.summaries() });
-};
-registry.setTitleProvider((sid) => titleStore.get(sid));
-
-// 模型权威名源（chatLanguageModels.json，独立可降级）：注册表变化时重推 session_list + model_list
-const modelNameStore = new ModelNameStore();
-modelNameStore.onChange = () => {
-  if (clients.size > 0) {
-    broadcast({ type: 'session_list', sessions: registry.summaries() });
-    broadcast({ type: 'model_list', models: modelNameStore.list() });
-  }
-};
-registry.setModelProvider((id) => modelNameStore.get(id));
-
-// 项目名映射（workspace.json），启动时异步构建；onRecord 经 let 绑定在运行时读取
-let projectNameMap = new Map<string, string>();
-const mappedProjects = new Set<string>();
-
-const tailer = new SessionTailer(WORKSPACE_STORAGE_ROOT, {
-  onRecord: (sessionId, file, rec, mtimeMs) => {
-    registry.onJsonl(sessionId, rec, mtimeMs);
-    if (!mappedProjects.has(sessionId)) {
-      mappedProjects.add(sessionId);
-      const hash = workspaceHashOf(file);
-      const name = hash ? projectNameMap.get(hash) : undefined;
-      if (name) registry.setProject(sessionId, name);
-    }
-  },
-  onRewrite: (sessionId) => registry.resetSession(sessionId),
-});
-
-/**
- * 写路径：把消息注入目标会话所在的 VS Code 窗口。
- * 前置校验：会话须已知（registry 有）+ 有项目名（窗口标题匹配）+ 有标题（会话切换匹配）。
- * 结果只回给发起方（send_result），不广播。
- */
-/** 思考程度 → UIA 选项标签（jsonl 用 xhigh，UIA 显示 "Extra High"） */
-const THINKING_UIA: Record<string, string> = {
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-  xhigh: 'Extra High',
-  max: 'Max',
-};
-
-async function handleSendMessage(
-  ws: WebSocket,
-  sessionId: string,
-  text: string,
-  mode?: string,
-  modelIdentifier?: string,
-  thinkingLevel?: string,
-): Promise<void> {
-  const reply = (ok: boolean, error?: string) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'send_result', sessionId, ok, ...(error ? { error } : {}) }));
-    }
-  };
-  const project = registry.getProject(sessionId);
-  if (!project) {
-    reply(false, '会话项目未知（无法定位 VS Code 窗口）');
-    return;
-  }
-  const title = titleStore.get(sessionId);
-  if (!title) {
-    reply(false, '会话标题未知（无法在会话列表中定位，可能刚创建尚未生成标题）');
-    return;
-  }
-  const textTrimmed = text.trim();
-  if (!textTrimmed) {
-    reply(false, '消息为空');
-    return;
-  }
-  // 选中值 → UIA 选项标签：mode 取 kind；模型 identifier → 显示名；思考程度映射
-  const selection: Selection = {};
-  if (mode) selection.agent = mode;
-  if (modelIdentifier) {
-    const name = modelNameStore.getChoice(modelIdentifier)?.name;
-    if (name) selection.model = name;
-  }
-  if (thinkingLevel) {
-    const t = THINKING_UIA[thinkingLevel] ?? thinkingLevel;
-    if (t) selection.thinking = t;
-  }
-  const result = await injectMessage(project, title, textTrimmed, selection);
-  reply(result.ok, result.error);
+/** 探测 agent host 的 TCP 端口（agent host 绑定 0.0.0.0，回环探测即可） */
+function probeAgentHost(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = net.connect({ host: '127.0.0.1', port: AGENT_HOST_PORT });
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      sock.destroy();
+      resolve(ok);
+    };
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+    setTimeout(() => done(false), 1000).unref();
+  });
 }
 
-/**
- * 新建会话写路径：点 PC 端 New Chat 建会话 + 注入首条消息。
- * 不依赖会话标题（新会话尚无标题），只需项目名定位窗口。
- * 结果只回给发起方（send_result，无 sessionId）。
- */
-async function handleCreateAndSend(
-  ws: WebSocket,
-  project: string,
-  text: string,
-  mode?: string,
-  modelIdentifier?: string,
-  thinkingLevel?: string,
-): Promise<void> {
-  const reply = (ok: boolean, error?: string) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'send_result', ok, ...(error ? { error } : {}) }));
-    }
-  };
-  const textTrimmed = text.trim();
-  if (!textTrimmed) {
-    reply(false, '消息为空');
-    return;
+/** 检查 Code.exe 进程是否存在（区分"没启动"与"没带环境变量启动"） */
+async function isCodeRunning(): Promise<boolean> {
+  try {
+    const { stdout } = await pExecFile('tasklist', [
+      '/FI',
+      'IMAGENAME eq Code.exe',
+      '/NH',
+    ]);
+    return /Code\.exe/i.test(stdout);
+  } catch {
+    return false;
   }
-  const selection: Selection = {};
-  if (mode) selection.agent = mode;
-  if (modelIdentifier) {
-    const name = modelNameStore.getChoice(modelIdentifier)?.name;
-    if (name) selection.model = name;
-  }
-  if (thinkingLevel) {
-    const t = THINKING_UIA[thinkingLevel] ?? thinkingLevel;
-    if (t) selection.thinking = t;
-  }
-  const result = await createAndInject(project, textTrimmed, selection);
-  reply(result.ok, result.error);
-}
-
-/** 给 hello/session_list 附上记录源健康状态（区分"模型没输出"与"链路断了"） */
-function withRecorder(e: BridgeEvent): BridgeEvent {
-  if (e.type === 'hello' || e.type === 'session_list') {
-    return { ...e, recorder: heimdallTailer.health(registry.lastActivity()) };
-  }
-  return e;
 }
 
 const server = http.createServer(async (req, res) => {
   try {
     const url = (req.url ?? '/').split('?')[0];
+
+    if (url === '/api/config') {
+      const token = await readAgentHostToken();
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ agentHostPort: AGENT_HOST_PORT, token }));
+      return;
+    }
+
+    if (url === '/api/health') {
+      const up = await probeAgentHost();
+      const status = up
+        ? 'ok'
+        : (await isCodeRunning() ? 'not_started_with_env' : 'vscode_not_running');
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ status, agentHostPort: AGENT_HOST_PORT }));
+      return;
+    }
+
     if (url.startsWith('/api/')) {
-      res.writeHead(404, { 'content-type': 'application/json' });
+      res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ error: 'not found' }));
       return;
     }
-    let file: string;
-    if (url.startsWith('/vendor/')) {
-      // 本地 vendor（如 marked），避免外网 CDN 依赖
-      const rel = url.slice('/vendor/'.length);
-      file = path.resolve(NODE_MODULES, rel);
-      if (!file.startsWith(NODE_MODULES + path.sep)) {
-        res.writeHead(403);
-        res.end('forbidden');
-        return;
-      }
-    } else {
-      const rel = url === '/' ? 'index.html' : url.slice(1);
-      file = path.resolve(WEB_ROOT, rel);
-      if (file !== WEB_ROOT && !file.startsWith(WEB_ROOT + path.sep)) {
-        res.writeHead(403);
-        res.end('forbidden');
+
+    // 静态文件（SPA：未命中的非文件路径回退 index.html）
+    const rel = url === '/' ? 'index.html' : url.slice(1);
+    const file = path.resolve(WEB_ROOT, rel);
+    if (file !== WEB_ROOT && !file.startsWith(WEB_ROOT + path.sep)) {
+      res.writeHead(403);
+      res.end('forbidden');
+      return;
+    }
+    let data: Buffer;
+    try {
+      data = await fsp.readFile(file);
+    } catch {
+      if (path.extname(file) === '') {
+        const fallback = path.join(WEB_ROOT, 'index.html');
+        data = await fsp.readFile(fallback);
+      } else {
+        res.writeHead(404);
+        res.end('not found');
         return;
       }
     }
-    const data = await fsp.readFile(file);
     const ext = path.extname(file).toLowerCase();
     res.writeHead(200, {
       'content-type': MIME[ext] ?? 'application/octet-stream',
@@ -211,117 +114,21 @@ const server = http.createServer(async (req, res) => {
     });
     res.end(data);
   } catch {
-    res.writeHead(404);
-    res.end('not found');
+    res.writeHead(500);
+    res.end('internal error');
   }
 });
-
-// 固定 /ws 路径：开发期 Vite 代理 ws://…/ws → bridge，前端同源连接
-const wss = new WebSocketServer({ server, path: '/ws' });
-const clients = new Set<WebSocket>();
-
-function broadcast(e: BridgeEvent): void {
-  const payload = JSON.stringify(e);
-  for (const ws of clients) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(payload);
-  }
-}
-
-wss.on('connection', (ws) => {
-  clients.add(ws);
-  ws.send(
-    JSON.stringify(
-      withRecorder({ type: 'hello', sessions: registry.summaries() }),
-    ),
-  );
-  // 模型列表（前端模型下拉 + thinking 档位）
-  ws.send(JSON.stringify({ type: 'model_list', models: modelNameStore.list() }));
-  ws.on('message', (buf) => {
-    let msg: {
-      type?: string;
-      sessionId?: string;
-      text?: string;
-      project?: string;
-      mode?: string;
-      modelIdentifier?: string;
-      thinkingLevel?: string;
-    };
-    try {
-      msg = JSON.parse(buf.toString('utf8'));
-    } catch {
-      return;
-    }
-    if (msg.type === 'replay' && msg.sessionId) {
-      const sid = msg.sessionId;
-      void (async () => {
-        const state = await registry.fullState(sid);
-        if (state && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'replay', ...state }));
-        }
-      })();
-    } else if (msg.type === 'send_message' && msg.sessionId && msg.text) {
-      // 写路径：UIA 注入 VS Code（异步，结果经 send_result 回执给发起方）
-      void handleSendMessage(
-        ws,
-        msg.sessionId,
-        msg.text,
-        msg.mode,
-        msg.modelIdentifier,
-        msg.thinkingLevel,
-      );
-    } else if (msg.type === 'create_and_send' && msg.project && msg.text) {
-      // 新建会话写路径：点 New Chat 建会话 + 注入首条（异步，结果经 send_result 回执）
-      void handleCreateAndSend(
-        ws,
-        msg.project,
-        msg.text,
-        msg.mode,
-        msg.modelIdentifier,
-        msg.thinkingLevel,
-      );
-    }
-  });
-  ws.on('close', () => clients.delete(ws));
-});
-
-// recorder 健康值只随 hello/session_list 推送，前端可能长时间收不到更新
-// （stale 状态陈旧）。周期性广播轻量 session_list 刷新健康状态。
-const healthTimer = setInterval(() => {
-  if (clients.size > 0) {
-    broadcast({ type: 'session_list', sessions: registry.summaries() });
-  }
-}, 30000);
-healthTimer.unref();
 
 server.listen(PORT, HOST, () => {
   console.log(`copilot-bridge listening on http://${HOST}:${PORT}`);
-  console.log(`workspace storage: ${WORKSPACE_STORAGE_ROOT}`);
-  void (async () => {
-    // 项目名映射先建（onRecord 可能紧随其后触发）
-    projectNameMap = await buildProjectNameMap();
-    console.log(`project name map: ${projectNameMap.size} workspaces`);
-    titleStore.start();
-    modelNameStore.start();
-    await tailer.start();
-    console.log('tailer started');
-    registry.start();
-    await heimdallTailer.start();
-    console.log('heimdall tailer started');
-  })().catch((err) => {
-    console.error('start failed:', err);
-    process.exit(1);
-  });
+  console.log(
+    `agent host: ws://<本机地址>:${AGENT_HOST_PORT}（token 文件 %USERPROFILE%\\.copilot-bridge\\token.txt）`,
+  );
 });
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
     console.log(`received ${sig}, shutting down`);
-    registry.stop();
-    titleStore.stop();
-    modelNameStore.stop();
-    clearInterval(healthTimer);
-    void Promise.allSettled([tailer.stop(), heimdallTailer.stop()]);
-    wss.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 2000).unref();
   });
