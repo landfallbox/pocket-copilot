@@ -4,6 +4,7 @@
 > 新会话开始任何工作前，先完整阅读本文件以恢复全部上下文，然后从"下一步"继续。
 > 2026-08-27 由 REQUIREMENTS.md（需求封板）与 CONTEXT.md（技术事实）合并而成。
 > **2026-09-23 架构大改**：AHP（Agent Host Protocol）端到端 Spike 通过，读/写路径全部改用 AHP 官方协议；原 heimdall 记录 + 对齐器读路径与 UIA 写路径退役（详见 §12）。
+> **2026-09-23 端形态定稿**：最终手机端为 **Android 原生 App**（Kotlin + Compose），电脑端 bridge 演进为 **daemon**（AHP 客户端 + 简化手机协议网关 + 配对）；AHP 留在电脑端，Android 为瘦客户端（详见 §5/§6/§9）。PWA 降级为过渡期开发工具（仍直连 agent host）。
 
 ---
 
@@ -45,12 +46,15 @@
 
 ## 3. 里程碑
 
-| 里程碑 | 内容 |
-|---|---|
-| M1 | 读全通：会话总览 + 全量历史 + 实时流 + diff 基础版 |
-| M2 | 写起步：发送文字消息 |
-| M3 | 写增强：批准/拒绝、回答提问、打断 |
-| M4 | 体验增强：diff 完整交互、推送、端形态定稿 |
+> M1/M2 已由 PWA 直连 agent host 完成（读全通 + 发送消息）。2026-09-23 端形态定稿后重排：AHP 客户端逻辑从 PWA 上移到电脑端 daemon，手机端改为 Android 原生瘦客户端。
+
+| 里程碑 | 内容 | 状态 |
+|---|---|---|
+| M1 | 读全通：会话总览 + 全量历史 + 实时流 + diff 基础版（PWA 直连验证） | ✅ 完成 |
+| M2 | 写起步：发送文字消息（PWA 直连验证） | ✅ 完成 |
+| M3a | **daemon**：AHP 镜像（焦点会话 ChatState）+ 简化手机协议网关 + QR 配对；WS 脚本验证全链路 | 进行中 |
+| M4 | **Android App**（Kotlin + Compose）：实现同一套简化协议（会话列表 / 视图快照渲染 / 发消息） | 待启动 |
+| M5 | 写增强：批准/拒绝、回答提问、打断 + 体验（托盘、推送、diff 完整交互） | 待启动 |
 
 ## 4. 现阶段不做
 
@@ -58,6 +62,7 @@
 - PWA 壳（manifest / service worker / 添加到主屏）
 - 手机端发起全新会话
 - AHP 连接建立前的历史内容（不回填）
+- 多焦点会话镜像（daemon 同一时刻只镜像手机正在看的"焦点会话"，切会话才切订阅）
 
 ## 5. 关键决策（讨论确认）
 
@@ -71,11 +76,18 @@
 | M2 消息格式 | 纯文本 |
 | diff 体验 | 最终完整实现，先做基础版（有待审编辑 + diff 内容展示） |
 | 写路径具体机制 | **AHP dispatchAction**（2026-09-23 Spike 3 实测定稿：外部客户端向 chat 通道发 `chat/pendingMessageSet`，Copilot turn 真实执行，与 Agents 窗口同一代码路径）；UIA/CDP 方案退役（见 §12） |
-| bridge 角色 | 薄服务：静态托管 + 配置（token/地址）+ 健康检查（agent host 端口探测）；数据面不过 bridge，手机经 AHP 直连 agent host |
-| 手机端 App 形态 | 早期仅浏览器（开发/测试用，不做 PWA 壳）；体验足够完整时直接打包为真 App（如 Capacitor） |
-| 前端技术栈 | React 19 + Vite + TS + zustand（沿用 demo 已验证底座）；**移除 @assistant-ui/react**，展示层手写组件 |
-| bridge 架构 | 不引入框架，现有裸 Node 骨架扩展 |
-| 推送通知 | 待定 |
+| **端形态（2026-09-23 定稿）** | 最终手机端 = **Android 原生 App**（Kotlin + Jetpack Compose，瘦客户端）；电脑端 = **daemon**（bridge 演进）；PWA 降级为过渡期开发工具（仍直连 agent host，用于绕过 daemon 调试） |
+| **AHP 客户端位置** | **电脑端 daemon**（Node + 官方 `@microsoft/agent-host-protocol` TS 包，已验证）；Android 不实现 AHP（Kotlin 重写 = 重复劳动，且原始 token 会暴露到手机） |
+| **daemon 角色** | ① AHP 客户端：订阅根通道（会话列表）+ 焦点会话的 session/chat 通道，官方 `chatReducer` 维护 ChatState；② 简化手机协议网关（JSON over WS，推视图快照）；③ QR 配对（按设备发 deviceToken，原始 AHP token 不出电脑）；④ 健康探测 + VS Code 重启后自动重连 |
+| **手机协议粒度** | 快照制：daemon 维护完整 ChatState，状态变化节流 100ms 推**视图快照**（带单调版本号，手机忽略过期版本）；手机零 diff 逻辑 |
+| **镜像范围** | 只镜像"焦点会话"（手机正在看的那个 session + chat 通道）；手机切会话时 daemon 切订阅；不镜像全部会话 |
+| 配对方式 | QR 码：`copilot-bridge://pair?host=<Tailscale-IP>&port=8765&device=<deviceToken>`；Android deep link 解析后连 `ws://<host>:8765/ws` 发 `hello` 鉴权 |
+| PWA 过渡策略 | 保留直连 agent host 不动（开发/调试用）；不切到 daemon（用户 2026-09-23 决定跳过该过渡步骤，daemon 用 WS 脚本验证后直接进 Android） |
+| 前端技术栈（PWA，过渡期） | React 19 + Vite + TS + zustand（沿用 demo 已验证底座）；**移除 @assistant-ui/react**，展示层手写组件 |
+| Android 技术栈 | Kotlin + Jetpack Compose；WebSocket 用 OkHttp；QR 扫码用 ML Kit（deep link 兜底手动输入） |
+| daemon 架构 | 不引入框架，现有裸 Node 骨架扩展（`src/ahp/` + `src/phone/` 模块） |
+| daemon 形态 | v1 纯后台进程 + 日志文件；托盘图标放 M5 |
+| 推送通知 | 待定（M5） |
 
 ---
 
@@ -84,16 +96,21 @@
 ## 6. 总体架构
 
 ```
-手机端（早期浏览器，最终 App）◀── AHP over WebSocket（Tailscale，?tkn=token）──▶ VS Code agent host 进程
-                                                                                    ├── IPC 客户端：Agents 窗口（既有，不变）
-                                                                                    └── WS 客户端：手机 PWA（新增，对等）
-PC 端 bridge（薄服务 :8765）：PWA 静态托管 + 配置（token/地址）+ 健康检查（agent host 端口探测）
+Android App（瘦客户端）◀── 简化协议 JSON over WS（Tailscale，deviceToken 鉴权）──▶ 电脑端 daemon :8765
+                                                                              │  AHP 官方 TS 包
+                                                                              ▼
+                                                                    VS Code agent host 进程 :8081
+                                                                    ├── IPC 客户端：Agents 窗口（既有，不变）
+                                                                    └── WS 客户端：daemon（新增，对等）
+PWA（过渡期开发工具）◀── AHP over WS（?tkn=token，直连，绕过 daemon）──▶ agent host
 ```
 
 - 单一事实来源 = VS Code agent host 进程内的真实 Copilot 会话（读/写都走 AHP 官方协议，无文件解析、无 UI 自动化、无平行 agent）
-- 手机和 PC 操作的是字面意义上的同一个 Copilot：两个客户端共享同一 StateManager，记忆 / harness / 模型配置天然一致；手机发的消息在 Agents 窗口里与用户亲手输入无异
-- 手机 PWA 用官方客户端库 `@microsoft/agent-host-protocol`（浏览器兼容：global WebSocket、零依赖；`MultiHostClient` 内置自动重连；重连后重新订阅即得全量快照，replay 原生支持）
-- 进程拓扑：VS Code（含 agent host 子进程，带环境变量启动）+ bridge 薄服务；PWA 与 agent host 直连 AHP，bridge 不代理数据面
+- 手机和 PC 操作的是字面意义上的同一个 Copilot：daemon 与 Agents 窗口共享同一 StateManager，记忆 / harness / 模型配置天然一致；手机发的消息在 Agents 窗口里与用户亲手输入无异
+- **AHP 客户端逻辑在电脑端 daemon**（Node + 官方 `@microsoft/agent-host-protocol` TS 包，已验证）；daemon 订阅根通道 + 焦点会话的 session/chat 通道，用官方 `chatReducer` 维护 ChatState，节流 100ms 向手机推视图快照
+- **Android 是瘦客户端**：不实现 AHP，只实现简化协议（会话列表 / 视图快照渲染 / 发消息 / 切会话）；原始 AHP token 永不出电脑，手机只持 deviceToken
+- 进程拓扑：VS Code（含 agent host 子进程，带环境变量启动）+ daemon（`launch-vscode-ahp.cmd` 顺带拉起）；daemon 健康探测 + watch token.txt，VS Code 重启后自动重连
+- 协议版本漂移风险被隔离：AHP 版本变化只影响 daemon（Node 侧升级官方包即可），Android 协议是自研简单 JSON，不受影响
 
 **AHP 端到端 Spike 结论（2026-09-23，全链路验证通过，VS Code 1.136.2 + 真实 Copilot 账号）**：
 - **零改造启动**：agent host 进程读 `VSCODE_AGENT_HOST_PORT` / `VSCODE_AGENT_HOST_HOST` / `VSCODE_AGENT_HOST_CONNECTION_TOKEN` 环境变量，设置后即监听 TCP WebSocket 端口（`?tkn=` 查询参数认证）；桌面版 starter 深拷贝主进程 env 透传 → 带环境变量启动 VS Code 即可，零代码修改（启动器：`launch-vscode-ahp.cmd`）
@@ -188,34 +205,44 @@ jsonl 记录结构（抽样验证）：
 - **copilot-bridge 侧旧数据面代码**（heimdall-tailer / registry / tailer / line-tailer / session-info / session-titles / model-name / project-name，约 2000 行）随 M1 重构删除
 - **UIA 写路径**（Spike 2，`inject.ts` 386 行）同样退役删除；其前提 `accessibilitySupport: "on"` 已写入用户 settings.json，可保留（无害）或还原
 
-## 9. bridge 架构（Node，薄服务）
+## 9. daemon 架构（Node，bridge 演进）
 
-- 技术栈：TypeScript + ESM（`tsx` 直跑，无构建），**不引入框架**。服务 bind 0.0.0.0:8765（Tailscale 访问），`npm run dev` 启动
-- 职责（仅三项，数据面不过 bridge）：
-  - **静态托管**：PWA 的 Vite 构建产物（同端口出文件与配置）
-  - **配置端点**：返回 agent host 地址（`ws://<PC>:8081`）+ token，PWA 不硬编码
-  - **健康检查**：探测 agent host TCP 端口，区分"VS Code 未启动"与"未带环境变量启动"，暴露给 PWA 显示明确指引
-- 删除（旧数据面，约 2000 行）：`tailer` / `line-tailer` / `registry`（对齐器）/ `heimdall-tailer` / `session-info` / `session-titles` / `model-name` / `project-name` / `inject`（UIA）/ `types`（旧事件协议）
-- 保留改造：`config.ts`（增加 agent host 端口/token）、`server.ts`（去掉数据面 WS 广播，留静态 + 配置 + 健康检查）
+- 技术栈：TypeScript + ESM（`tsx` 直跑，无构建），**不引入框架**。服务 bind 0.0.0.0:8765（Tailscale 访问），`npm run dev` 启动；`launch-vscode-ahp.cmd` 顺带拉起
+- 职责：
+  - **AHP 客户端**（`src/ahp/`）：官方 `@microsoft/agent-host-protocol` TS 包；连接/initialize/断线重连（watch token.txt + 健康探测 8081）；订阅根通道（会话列表）+ 焦点会话的 session/chat 通道；官方 `chatReducer` 维护 ChatState
+  - **简化手机协议网关**（`src/phone/`）：JSON over WS（`/ws` 路径 upgrade）；设备鉴权（deviceToken）；会话列表 / 视图快照（节流 100ms + 单调版本号）/ host 状态 事件扇出；命令（select/send，M5 加 stop/respond）
+  - **配对**（`src/phone/pairing.ts`）：deviceToken 生成/校验（存 `%USERPROFILE%\.copilot-bridge\devices.json`）；QR 内容 `copilot-bridge://pair?host=<Tailscale-IP>&port=8765&device=<deviceToken>`
+  - **静态托管 + 配置端点 + 健康检查**（既有，保留）：PWA 过渡期仍用
+- 模块拆分：
+  - `src/ahp/connection.ts`：AHP 连接生命周期（store.ts 连接状态机移植）
+  - `src/ahp/mirror.ts`：根通道会话列表 + 焦点会话 ChatState（store.ts 的 consumeRoot/selectSession/consumeChat 移植）
+  - `src/ahp/view.ts`：ChatState → 手机视图快照（web/src/convert.ts 原样搬）
+  - `src/phone/protocol.ts`：协议类型（daemon / PWA / Android 三方共享）
+  - `src/phone/hub.ts`：手机 WS 连接管理、鉴权、扇出、心跳
+  - `src/phone/pairing.ts`：deviceToken + QR
+  - `src/server.ts`：既有 HTTP/静态/health + WS upgrade 路由
+- 生命周期：v1 纯后台进程 + 日志文件；托盘图标放 M5
 - 不引框架的理由：复杂度是纵向（AHP 状态 → 视图模型映射），框架提供的是横向抽象（路由/中间件），形状不匹配
 
-## 10. 前端（PWA）
+## 10. 前端（PWA，过渡期开发工具）
+
+> 2026-09-23 端形态定稿后，PWA 不再是最终交付物，降级为**过渡期开发/调试工具**：直连 agent host（绕过 daemon），用于 daemon 出问题时隔离排查（如 considering 卡住 bug）。M4 起最终交付物是 Android App。
 
 - 技术栈：React 19 + Vite + TS + **zustand**（沿用 demo/ 已验证底座）
-- **数据层**：官方客户端库 `@microsoft/agent-host-protocol`（浏览器内 `WebSocketTransport` + `AhpClient`/`AhpStateMirror`）；store.ts 从"消费 bridge 事件"重构为"AHP 状态镜像"（root/session/chat/changeset 订阅 → zustand）
-- **展示层复用**：手写组件（消息列表、流式气泡、可折叠步骤组、工具行、会话总览、diff 视图、输入框）保留，只把数据源从旧事件协议换成 AHP 状态（convert.ts 重写）
-- 视图映射：会话总览 = `listSessions` + root 通道订阅（sessionAdded/Removed/SummaryChanged）；聊天视图 = `ChatState.turns` + `chat/delta` 流式；历史 = `fetchTurns` 分页（turnsNextCursor）；diff = changeset 通道订阅（基础版 = 带颜色的行列表）
-- 写路径：M2 输入框 → dispatch `chat/pendingMessageSet`（queued）到 chat 通道；M3 批准/拒绝（`chat/toolCallConfirmed`）、回答提问（`chat/inputAnswerChanged`/`inputCompleted`）、打断（`chat/turnCancelled`，细节待验证）
-- 明确不引入：路由库（会话切换是状态不是路由）、CSS 框架、React Query 等数据层（数据是 AHP 订阅推的）
-- 该栈是 Capacitor 官方支持最好的组合，App 形态后置决策不受影响
+- **数据层**：官方客户端库 `@microsoft/agent-host-protocol`（浏览器内 `WebSocketTransport` + `AhpClient`）；store.ts 是"AHP 状态镜像"（root/session/chat 订阅 → zustand）
+- **复用去向**：store.ts 的连接/订阅状态机 → daemon `src/ahp/connection.ts` + `mirror.ts`；convert.ts 的 ChatState→消息模型 → daemon `src/ahp/view.ts`（即手机协议的 view 结构）
+- 视图映射：会话总览 = `listSessions` + root 通道订阅；聊天视图 = `ChatState.turns` + `chat/delta` 流式；历史 = `fetchTurns` 分页（turnsNextCursor）
+- 写路径：输入框 → dispatch `chat/pendingMessageSet`（queued）到 chat 通道
+- 明确不引入：路由库、CSS 框架、React Query 等数据层
 
 ## 11. 通信与网络
 
-- **AHP over WebSocket**（浏览器原生 WebSocket）PWA 直连 agent host :8081：协议本身是常开推送（快照 + 动作流），模型流式输出原生支持，不能轮询
-- **断线重连 + 重订阅全量快照**：`MultiHostClient` 内置自动重连；重连后重新订阅即得全量快照（会话数据 KB 级，全量重发简单不出错）
-- **静态托管**：浏览器阶段 Vite 构建产物由 bridge 托管（同端口出文件和配置）；App 阶段 UI 打进包内，此部分退役
-- **网络**：Tailscale（PC + 手机）；仅自己访问；agent host 端口必须带 token（`?tkn=`），PWA 从 bridge 配置端点获取
-- **单实例陷阱**：环境变量只对首个 VS Code 进程生效；已有实例运行时新进程只转发即退出、端口不开 → 健康检查要能区分"VS Code 未启动"与"未带环境变量启动"，PWA 显示指引（完全退出后用启动器冷启动）
+- **主数据面（最终形态）**：Android App ↔ daemon 走**简化协议 JSON over WS**（`ws://<Tailscale-IP>:8765/ws`，deviceToken 鉴权）；daemon ↔ agent host 走 AHP over WS（`?tkn=`）。AHP 的常开推送特性（快照 + 动作流）由 daemon 内部消化，对手机呈现为视图快照推送
+- **daemon → 手机推送**：视图快照制，节流 100ms + 单调版本号（手机忽略过期版本）；会话数据 KB 级，全量快照简单不出错
+- **断线重连**：daemon 侧 watch token.txt + 健康探测 8081，VS Code 重启后自动重连并重订阅（全量快照补齐）；Android 侧 WS 断线指数退避重连 + 重发 hello
+- **静态托管**：PWA 过渡期由 daemon 托管（同端口出文件和配置）；Android 阶段 UI 打进包内，此部分退役
+- **网络**：Tailscale（PC + 手机）；仅自己访问；agent host 端口必须带 token（`?tkn=`，仅 daemon 持有）；手机只持 deviceToken（QR 配对下发）
+- **单实例陷阱**：环境变量只对首个 VS Code 进程生效；已有实例运行时新进程只转发即退出、端口不开 → 健康检查要能区分"VS Code 未启动"与"未带环境变量启动"，daemon 日志 + 手机显示指引（完全退出后用启动器冷启动）
 
 ## 12. 已否决的备选方案（含原因，避免重复讨论）
 
@@ -229,10 +256,12 @@ jsonl 记录结构（抽样验证）：
 | jsonl 响应 chunk 流解析（原读路径） | 过于脆弱：滑动窗口快照去重、周期性压缩重写（38MB 文件/23MB 头部行）、围栏碎片，反复出 bug → 2026-08-27 转向 heimdall 记录 |
 | heimdall 记录 + jsonl 索引 + 对齐器读路径（曾为主路径，已建成并验证） | 被 AHP 取代（2026-09-23）：AHP 原生提供流式内容 + 会话归属 + 历史分页，无需自建"对齐承重墙"；原方案脆弱（jsonl 重写/prompt 包裹/竞态），且 heimdall 生产路由需背负记录功能。退役后 heimdall 仓库不动（功能在默认关的开关后） |
 | Windows UIA 写路径（Spike 2 实测通过） | 被 AHP 取代（2026-09-23）：AHP dispatch 是官方协议的同一代码路径，无 UI 结构依赖、无 `accessibilitySupport` 前提、不抢前台窗口；UIA 仅留历史记录（§8） |
+| Android 直连 agent host :8081（2026-09-23 否决） | 需 Kotlin 重写 AHP 客户端（通道模型/快照+动作流/reducer，纯重复劳动）；原始 AHP token 暴露到手机；AHP 版本漂移直接打到 App 层。改为 daemon 中转（§5/§6） |
+| PWA 壳 / Capacitor 套壳（2026-09-23 否决） | 用户明确最终要 Android 原生 App；套壳只是过渡，非终态 |
 
 ## 13. 风险与边界（必须接受）
 
-1. **AHP 协议版本漂移**：VS Code 升级可能带来协议版本变化（本机 1.136.2 服务端支持 0.9.0/1.0.0，与客户端库 0.9.0 协商）；npm 客户端库若滞后需同步升级。缓解：协议有版本协商、官方库随 VS Code 同步更新；开发期固定 VS Code 版本 + 冒烟回归（发消息→检查回复）
+1. **AHP 协议版本漂移**：VS Code 升级可能带来协议版本变化（本机 1.136.2 服务端支持 0.9.0/1.0.0，与客户端库 0.9.0 协商）；npm 客户端库若滞后需同步升级。缓解：协议有版本协商、官方库随 VS Code 同步更新；**漂移被隔离在 daemon（Node 侧升级官方包即可），Android 自研协议不受影响**；开发期固定 VS Code 版本 + 冒烟回归（发消息→检查回复）
 2. **单实例冷启动陷阱**：环境变量只对首个 VS Code 进程生效；已有实例运行时新进程只转发即退出、端口不开。缓解：健康检查区分"VS Code 未启动"与"未带环境变量启动"，PWA 显示指引（完全退出后用启动器冷启动）；用户日常习惯双击桌面图标 → 启动器需改为快捷方式目标
 3. **VS Code 必须开着**：会话活在 VS Code 进程里，agent host 是 VS Code 子进程——这是接入本体的固有约束
 4. **Copilot 登录依赖**：agent host 用主 profile 的 Copilot 登录态；登录过期时 turn 报 authentication 错误（PWA 需明确透出该错误并提示重新登录）
@@ -240,6 +269,7 @@ jsonl 记录结构（抽样验证）：
 6. **法律边界**：使用官方开源 AHP 协议（MIT）连接自己机器上的 agent host = 合规；不反编译 / 不复制分发微软代码
 7. **多实例边界**：每 user-data-dir 一个 agent host；若用户以不同 user-data-dir 开第二实例需第二个端口（罕见场景，后置支持）
 8. **长期**：若 VS Code 未来开放官方移动端 / 远程会话 API，本项目可退役或切换官方通道
+9. **第二个 AHP 客户端的副作用（排查中）**：PWA 直连期间观察到长 turn 结束后 thinking 块偶发卡在 "Considering"（agent host 状态已回 Idle，仅 UI 渲染未 finalize）；A/B 测试存在混淆变量（短 turn vs 长 turn），控制变量测试未完成。daemon 上线后 8081 上仍有 daemon 这一个外部 AHP 客户端，若 bug 复现则触发条件即"存在第二个 AHP 客户端"本身，需进一步定位（agent host 广播/finalize 链）
 
 ## 14. 验证计划（spikes）
 
@@ -263,9 +293,14 @@ Spike 链：**1.5a → 1.5 → 2（已完成，方案退役）→ 3（AHP 端到
    - web/：引入 `@microsoft/agent-host-protocol`，store.ts 重构（AhpStateMirror + zustand），convert.ts 重写（AHP 状态 → 视图模型）；展示层组件复用
    - src/：瘦身为薄服务（静态托管 + 配置端点 + agent host 端口健康检查）；删除旧数据面代码（约 2000 行，见 §8）
    - 验收：手机（Tailscale）打开 `http://<PC的tailscale-ip>:8765` → 会话总览 → 完整历史 → PC 侧真实会话实时流式
-5. **M2 写起步**：输入框 → dispatch `chat/pendingMessageSet`（queued）到 chat 通道；验收：手机发消息 → Copilot 执行 → 回复两端流式
-6. **M3 写增强**：批准/拒绝（`chat/toolCallConfirmed`）、回答提问（`chat/inputAnswerChanged`/`inputCompleted`）、打断（`chat/turnCancelled` 细节验证）
-7. **M4 体验**：diff 完整交互（changeset 审阅/应用/拒绝）、推送通知、App 形态（Capacitor 打包）
+5. ~~**M2 写起步**~~：✅ 完成（PWA 直连，dispatch `chat/pendingMessageSet`（queued）到 chat 通道；手机发消息 → Copilot 执行 → 回复两端流式）
+6. **M3a daemon**（2026-09-23 端形态定稿后新增）：
+   - `src/ahp/`：connection.ts（连接/重连，store.ts 状态机移植）+ mirror.ts（根通道会话列表 + 焦点会话 ChatState）+ view.ts（convert.ts 移植 → 视图快照）
+   - `src/phone/`：protocol.ts（协议类型）+ hub.ts（WS 连接管理/鉴权/扇出/心跳）+ pairing.ts（deviceToken + QR）
+   - `src/server.ts`：加 WS upgrade 路由（`/ws`）；`launch-vscode-ahp.cmd` 顺带拉起 daemon
+   - 验收：WS 脚本全链路（hello 鉴权 → welcome 会话列表 → 焦点会话视图快照随 PC 侧 turn 流式更新 → send → Copilot 执行 → 回显）
+7. **M4 Android App**：Kotlin + Jetpack Compose；实现同一套简化协议（QR 配对 → 会话列表 → 视图快照渲染 → 发消息）；真机（Tailscale）验收
+8. **M5 写增强 + 体验**：批准/拒绝（`chat/toolCallConfirmed`）、回答提问（`chat/inputAnswerChanged`/`inputCompleted`）、打断（`chat/turnCancelled` 细节验证）、托盘、推送、diff 完整交互
 
 ## 16. 用户偏好（新会话必须遵守）
 
