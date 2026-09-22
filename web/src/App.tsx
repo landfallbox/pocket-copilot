@@ -30,20 +30,16 @@ import {
   CodeRegular as CodeIcon,
   NavigationRegular as MenuIcon,
   ChatRegular as ChatIcon,
-  AddRegular as AddIcon,
 } from '@fluentui/react-icons';
+import type { SessionSummary } from '@microsoft/agent-host-protocol';
 import {
-  useDemoStore,
+  useAhpStore,
   startConnection,
   selectSession,
-  startDraft,
   sendMessage,
-  pickMode,
-  pickModel,
-  pickThinking,
-  type SessionState,
+  loadOlder,
 } from './store';
-import { sessionToMessages, type Message, type Part } from './convert';
+import { chatToMessages, type Message, type Part } from './convert';
 
 // ============================================================================
 // = 主题                                                                      =
@@ -347,7 +343,7 @@ function AssistantMessage({
   const styles = msgStyles();
   const nodes = useMemo(() => {
     const out: Array<
-      { kind: 'group'; parts: Part[] } | { kind: 'text'; index: number }
+      { kind: 'group'; parts: Part[] } | { kind: 'text'; part: Part }
     > = [];
     let group: Part[] = [];
     const flush = () => {
@@ -361,7 +357,7 @@ function AssistantMessage({
         group.push(p);
       } else if (p.type === 'text' && p.text.trim()) {
         flush();
-        out.push({ kind: 'text', index: i });
+        out.push({ kind: 'text', part: p });
       }
     });
     flush();
@@ -390,14 +386,8 @@ function AssistantMessage({
             running={running && i === lastGroupIdx}
           />
         ) : (
-          <div key={`t${n.index}`}>
-            <Markdown
-              text={
-                message.parts[n.index].type === 'text'
-                  ? message.parts[n.index].text
-                  : ''
-              }
-            />
+          <div key={`t${i}`}>
+            <Markdown text={n.part.type === 'text' ? n.part.text : ''} />
           </div>
         ),
       )}
@@ -440,13 +430,7 @@ const emptyStyles = makeStyles({
 });
 
 /** 空状态：居中图标 + 引导文案（模仿移动端"开始对话"） */
-function EmptyState({
-  hasSession,
-  isDraft,
-}: {
-  hasSession: boolean;
-  isDraft?: boolean;
-}) {
+function EmptyState({ hasSession }: { hasSession: boolean }) {
   const styles = emptyStyles();
   return (
     <div className={styles.wrap}>
@@ -454,16 +438,12 @@ function EmptyState({
         <ChatIcon fontSize={28} />
       </div>
       <div className={styles.title}>
-        {isDraft ? '新建会话' : hasSession ? '此会话暂无消息' : '开始一段对话'}
+        {hasSession ? '此会话暂无消息' : '开始一段对话'}
       </div>
-      {isDraft ? (
-        <div className={styles.sub}>输入首条消息，将在 PC 端创建新会话</div>
-      ) : (
-        !hasSession && (
-          <div className={styles.sub}>
-            从左侧选择一个会话，或直接输入消息发送到 VS Code
-          </div>
-        )
+      {!hasSession && (
+        <div className={styles.sub}>
+          从左侧选择一个会话，或直接输入消息发送到 VS Code
+        </div>
       )}
     </div>
   );
@@ -473,12 +453,14 @@ function MessageList({
   messages,
   running,
   hasSession,
-  isDraft,
+  canLoadOlder,
+  loadingOlder,
 }: {
   messages: Message[];
   running: boolean;
   hasSession: boolean;
-  isDraft?: boolean;
+  canLoadOlder: boolean;
+  loadingOlder: boolean;
 }) {
   const styles = msgStyles();
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -490,13 +472,48 @@ function MessageList({
   return (
     <div className="flex-1 overflow-y-auto" style={{ padding: '16px 16px 8px' }}>
       {messages.length === 0 ? (
-        <EmptyState hasSession={hasSession} isDraft={isDraft} />
+        <EmptyState hasSession={hasSession} />
       ) : (
         <div style={{ maxWidth: '720px', margin: '0 auto' }}>
+          {canLoadOlder && (
+            <div style={{ textAlign: 'center', marginBottom: '12px' }}>
+              <button
+                onClick={() => void loadOlder()}
+                disabled={loadingOlder}
+                style={{
+                  padding: '4px 12px',
+                  fontSize: '12px',
+                  borderRadius: '12px',
+                  border: '1px solid var(--vscode-border)',
+                  backgroundColor: 'transparent',
+                  color: 'var(--vscode-muted-fg)',
+                  cursor: loadingOlder ? 'default' : 'pointer',
+                  opacity: loadingOlder ? 0.6 : 1,
+                }}
+              >
+                {loadingOlder ? '加载中…' : '加载更早消息'}
+              </button>
+            </div>
+          )}
           {messages.map((m) =>
             m.role === 'user' ? (
               <div key={m.id} className={styles.userRow}>
-                <div className={styles.userBubble}>{m.text}</div>
+                <div className={styles.userBubble}>
+                  {m.text}
+                  {m.queued && (
+                    <span
+                      style={{
+                        display: 'block',
+                        marginTop: '4px',
+                        fontSize: '11px',
+                        textAlign: 'right',
+                        opacity: 0.6,
+                      }}
+                    >
+                      排队中
+                    </span>
+                  )}
+                </div>
               </div>
             ) : (
               <AssistantMessage
@@ -581,232 +598,18 @@ const inputStyles = makeStyles({
   },
 });
 
-// ============================================================================
-// = 选择栏（Agent / 模型 / 思考程度，发消息时联动 PC 端）                  =
-// ============================================================================
-
-const selectionStyles = makeStyles({
-  bar: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: '6px',
-  },
-  chip: {
-    display: 'flex',
-    alignItems: 'center',
-    flexShrink: 0,
-    gap: '3px',
-    padding: '3px 6px',
-    borderRadius: '6px',
-    fontSize: '12px',
-    border: 'none',
-    backgroundColor: 'transparent',
-    color: 'var(--vscode-muted-fg)',
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-    maxWidth: '180px',
-  },
-  chipLabel: {
-    flexShrink: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-  },
-  menu: {
-    position: 'absolute',
-    bottom: 'calc(100% + 6px)',
-    left: 0,
-    zIndex: 40,
-    minWidth: '160px',
-    maxHeight: '240px',
-    overflowY: 'auto',
-    backgroundColor: 'var(--vscode-card)',
-    border: '1px solid var(--vscode-border)',
-    borderRadius: '10px',
-    boxShadow: '0 -2px 16px rgba(0, 0, 0, 0.4)',
-    padding: '4px',
-  },
-  item: {
-    display: 'block',
-    width: '100%',
-    padding: '7px 10px',
-    borderRadius: '7px',
-    fontSize: '13px',
-    textAlign: 'left',
-    border: 'none',
-    background: 'transparent',
-    color: 'var(--vscode-foreground)',
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-  },
-  itemActive: {
-    backgroundColor: 'var(--vscode-muted)',
-    fontWeight: 600,
-  },
-});
-
-const THINKING_LABELS: Record<string, string> = {
-  none: 'None',
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-  xhigh: 'Extra High',
-  max: 'Max',
-};
-const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
-
-/** 输入框上方三项选择：Agent 模式 / 模型 / 思考程度（点击弹菜单，发消息时生效） */
-function SelectionBar() {
-  const styles = selectionStyles();
-  const version = useDemoStore((s) => s.version);
-  const activeSessionId = useDemoStore((s) => s.activeSessionId);
-  const modelList = useDemoStore((s) => s.modelList);
-  const selMode = useDemoStore((s) => s.selMode);
-  const selModelId = useDemoStore((s) => s.selModelId);
-  const selThinking = useDemoStore((s) => s.selThinking);
-  const [open, setOpen] = useState<null | 'agent' | 'model' | 'thinking'>(null);
-
-  void version;
-  if (!activeSessionId) return null;
-
-  const curModel = modelList.find((m) => m.identifier === selModelId);
-  const efforts = curModel?.supportsReasoningEffort ?? [];
-
-  return (
-    <div className={styles.bar}>
-      {open && (
-        <div
-          style={{ position: 'fixed', inset: 0, zIndex: 39 }}
-          onClick={() => setOpen(null)}
-        />
-      )}
-      {/* Agent 模式 */}
-      <div style={{ position: 'relative' }}>
-        <button
-          className={styles.chip}
-          onClick={() => setOpen(open === 'agent' ? null : 'agent')}
-        >
-          <span className={styles.chipLabel}>{cap(selMode ?? 'agent')}</span>
-          <ChevronDownIcon fontSize={12} />
-        </button>
-        {open === 'agent' && (
-          <div className={styles.menu}>
-            {['agent', 'plan'].map((m) => (
-              <button
-                key={m}
-                className={
-                  selMode === m
-                    ? `${styles.item} ${styles.itemActive}`
-                    : styles.item
-                }
-                onClick={() => {
-                  pickMode(m);
-                  setOpen(null);
-                }}
-              >
-                {cap(m)}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      {/* 模型 */}
-      <div style={{ position: 'relative' }}>
-        <button
-          className={styles.chip}
-          onClick={() => setOpen(open === 'model' ? null : 'model')}
-        >
-          <span className={styles.chipLabel}>
-            {curModel?.name ?? selModelId ?? '模型'}
-          </span>
-          <ChevronDownIcon fontSize={12} />
-        </button>
-        {open === 'model' && (
-          <div className={styles.menu} style={{ minWidth: '200px' }}>
-            {modelList.length === 0 && (
-              <div
-                style={{
-                  padding: '8px 10px',
-                  fontSize: '12px',
-                  color: 'var(--vscode-muted-fg)',
-                }}
-              >
-                无模型
-              </div>
-            )}
-            {modelList.map((m) => (
-              <button
-                key={m.identifier}
-                className={
-                  selModelId === m.identifier
-                    ? `${styles.item} ${styles.itemActive}`
-                    : styles.item
-                }
-                onClick={() => {
-                  pickModel(m.identifier);
-                  setOpen(null);
-                }}
-              >
-                {m.name}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      {/* 思考程度（仅当前模型支持时显示） */}
-      {efforts.length > 0 && (
-        <div style={{ position: 'relative' }}>
-          <button
-            className={styles.chip}
-            onClick={() => setOpen(open === 'thinking' ? null : 'thinking')}
-          >
-            <span className={styles.chipLabel}>
-              {THINKING_LABELS[selThinking ?? ''] ?? selThinking ?? '—'}
-            </span>
-            <ChevronDownIcon fontSize={12} />
-          </button>
-          {open === 'thinking' && (
-            <div className={styles.menu}>
-              {efforts.map((lv) => (
-                <button
-                  key={lv}
-                  className={
-                    selThinking === lv
-                      ? `${styles.item} ${styles.itemActive}`
-                      : styles.item
-                  }
-                  onClick={() => {
-                    pickThinking(lv);
-                    setOpen(null);
-                  }}
-                >
-                  {THINKING_LABELS[lv] ?? lv}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function InputFooter() {
   const styles = inputStyles();
   const [value, setValue] = useState('');
-  const sending = useDemoStore((s) => s.sending);
-  const connected = useDemoStore((s) => s.connected);
-  const activeSessionId = useDemoStore((s) => s.activeSessionId);
-  const isDraft = useDemoStore((s) => s.draftProject !== null);
+  const phase = useAhpStore((s) => s.phase);
+  const chatState = useAhpStore((s) => s.chatState);
+  const connected = phase === 'connected';
+  const ready = connected && !!chatState;
 
-  const canSend =
-    !!value.trim() &&
-    !sending &&
-    connected &&
-    (!!activeSessionId || isDraft);
+  const canSend = !!value.trim() && ready;
   const submit = () => {
     const text = value.trim();
-    if (!text || sending || !connected || (!activeSessionId && !isDraft))
-      return;
+    if (!text || !ready) return;
     sendMessage(text);
     setValue('');
   };
@@ -825,32 +628,29 @@ function InputFooter() {
             }
           }}
           placeholder={
-            isDraft
-              ? '输入首条消息以创建会话…'
-              : activeSessionId
-                ? '询问 Copilot…'
-                : '选择会话后可发送'
+            !connected
+              ? '正在连接 VS Code…'
+              : !chatState
+                ? '选择会话后可发送'
+                : '询问 Copilot…'
           }
-          disabled={!activeSessionId && !isDraft}
+          disabled={!ready}
           rows={1}
         />
         <div className={styles.bottomRow}>
-          <SelectionBar />
           <button
             className={canSend ? styles.send : `${styles.send} ${styles.sendDisabled}`}
             onClick={submit}
             disabled={!canSend}
             aria-label="发送"
           >
-            {sending ? <Spinner size="tiny" /> : <SendIcon fontSize={16} />}
+            <SendIcon fontSize={16} />
           </button>
         </div>
       </div>
-      {sending && (
+      {connected && chatState?.activeTurn && (
         <div className={styles.hint}>
-          {isDraft
-            ? '正在新建会话并注入（激活窗口 → 新建 → 粘贴发送）…'
-            : '正在注入 VS Code（激活窗口 → 切换会话 → 粘贴发送）…'}
+          Copilot 正在工作，现在发送的消息将排队，当前回合结束后自动发出
         </div>
       )}
     </div>
@@ -968,31 +768,29 @@ function Sidebar({
   activeSessionId,
   onPick,
 }: {
-  sessions: SessionState[];
+  sessions: SessionSummary[];
   activeSessionId: string | null;
   onPick: (id: string) => void;
 }) {
   const styles = sidebarStyles();
   const PAGE = 6;
   const [showCount, setShowCount] = useState(PAGE);
-  useDemoStore((s) => s.version);
-
 
   // 当前会话所属项目（侧边栏高亮用）
   const activeProject = useMemo(
     () =>
       activeSessionId
-        ? (sessions.find((s) => s.sessionId === activeSessionId)?.project ??
-          null)
+        ? (sessions.find((s) => s.resource === activeSessionId)?.project
+            ?.displayName ?? null)
         : null,
     [sessions, activeSessionId],
   );
 
   // 全量项目分组（含会话数 + 最近活动），按最近活动排序
   const allGroups = useMemo(() => {
-    const byProject = new Map<string, SessionState[]>();
+    const byProject = new Map<string, SessionSummary[]>();
     for (const s of sessions) {
-      const key = s.project || '未分组';
+      const key = s.project?.displayName || '未分组';
       const arr = byProject.get(key);
       if (arr) arr.push(s);
       else byProject.set(key, [s]);
@@ -1000,10 +798,10 @@ function Sidebar({
     return [...byProject.entries()]
       .map(([project, list]) => ({
         project,
-        list: list.sort((a, b) => b.lastActivity - a.lastActivity),
-        lastActivity: list[0].lastActivity,
+        list: list.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt)),
+        lastActivity: list[0].modifiedAt,
       }))
-      .sort((a, b) => b.lastActivity - a.lastActivity);
+      .sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
   }, [sessions]);
 
   // 分页：默认显示最近 6 个，"Show more" 每次展开 6 个
@@ -1044,9 +842,9 @@ function Sidebar({
               key={g.project}
               project={g.project}
               count={g.list.length}
-              recentTitle={g.list[0].title || g.list[0].sessionId.slice(0, 8)}
+              recentTitle={g.list[0].title || g.list[0].resource.slice(0, 8)}
               active={g.project === activeProject}
-              onPick={() => onPick(g.list[0].sessionId)}
+              onPick={() => onPick(g.list[0].resource)}
             />
           ))}
         </div>
@@ -1209,12 +1007,12 @@ const appStyles = makeStyles({
 export default function App() {
   const appStyles_ = appStyles();
   const baseTheme = useFluentBaseTheme();
-  const connected = useDemoStore((s) => s.connected);
-  const version = useDemoStore((s) => s.version);
-  const activeSessionId = useDemoStore((s) => s.activeSessionId);
-  const error = useDemoStore((s) => s.error);
-  const isDraft = useDemoStore((s) => s.draftProject !== null);
-  const draftProject = useDemoStore((s) => s.draftProject);
+  const phase = useAhpStore((s) => s.phase);
+  const sessions = useAhpStore((s) => s.sessions);
+  const activeSessionId = useAhpStore((s) => s.activeSessionId);
+  const error = useAhpStore((s) => s.error);
+  const chatState = useAhpStore((s) => s.chatState);
+  const loadingOlder = useAhpStore((s) => s.loadingOlder);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [titleMenuOpen, setTitleMenuOpen] = useState(false);
 
@@ -1222,35 +1020,21 @@ export default function App() {
     startConnection();
   }, []);
 
-  const sessions = useMemo(() => {
-    void version;
-    return [...useDemoStore.getState().sessions.values()].sort(
-      (a, b) => b.lastActivity - a.lastActivity,
-    );
-  }, [version]);
+  const connected = phase === 'connected';
 
-  const { messages, running, activeTitle } = useMemo(() => {
-    void version;
-    const s = useDemoStore.getState();
-    // draft 模式：显示乐观用户消息（首条发送后的过渡）
-    if (s.draftProject) {
-      return {
-        messages: s.draftMessages as Message[],
-        running: false,
-        activeTitle: s.draftProject,
-      };
-    }
-    const sess = activeSessionId ? s.sessions.get(activeSessionId) : undefined;
-    if (!sess)
-      return { messages: [] as Message[], running: false, activeTitle: '' };
-    const msgs = sessionToMessages(sess.order, sess.requests);
-    const isRunning = sess.order.some((id) => !sess.requests.get(id)?.done);
-    return {
-      messages: msgs,
-      running: isRunning,
-      activeTitle: sess.title || sess.sessionId.slice(0, 8),
-    };
-  }, [version, activeSessionId]);
+  // 聊天展示：ChatState → 消息列表
+  const messages = useMemo(
+    () => (chatState ? chatToMessages(chatState) : []),
+    [chatState],
+  );
+  const running = !!chatState?.activeTurn;
+  const canLoadOlder = !!chatState?.turnsNextCursor;
+
+  const activeTitle = useMemo(() => {
+    if (!activeSessionId) return '';
+    const s = sessions.find((x) => x.resource === activeSessionId);
+    return s?.title || activeSessionId.slice(0, 8);
+  }, [sessions, activeSessionId]);
 
   // 选中会话后自动收起抽屉（移动端习惯）
   const handleSelect = (id: string) => {
@@ -1262,15 +1046,14 @@ export default function App() {
   const activeProject = useMemo(() => {
     if (!activeSessionId) return null;
     return (
-      useDemoStore.getState().sessions.get(activeSessionId)?.project ?? null
+      sessions.find((s) => s.resource === activeSessionId)?.project
+        ?.displayName ?? null
     );
-  }, [activeSessionId, version]);
+  }, [sessions, activeSessionId]);
 
   const titleMenuList = useMemo(() => {
-    if (!activeProject) return [] as SessionState[];
-    return sessions
-      .filter((s) => s.project === activeProject)
-      .sort((a, b) => b.lastActivity - a.lastActivity);
+    if (!activeProject) return [] as SessionSummary[];
+    return sessions.filter((s) => s.project?.displayName === activeProject);
   }, [sessions, activeProject]);
 
   const pickFromTitle = (id: string) => {
@@ -1278,19 +1061,10 @@ export default function App() {
     setTitleMenuOpen(false);
   };
 
-  // 标题显示：draft 模式显示项目名（新会话标题生成后会替换）
-  const displayTitle = isDraft
-    ? draftProject
-    : activeTitle || (connected ? 'Copilot Bridge' : '连接中…');
-  // 标题下拉：draft 模式恒可用（切到已有会话 = 放弃新建）
-  const titleEnabled = isDraft || titleMenuList.length > 1;
-
-  // 新建会话：纯前端进入 draft 模式（首条消息发送时才真正触发 PC 建会话）
-  const handleNewSession = () => {
-    if (!activeProject || isDraft) return;
-    startDraft(activeProject);
-    setTitleMenuOpen(false);
-  };
+  // 标题显示
+  const displayTitle = activeTitle || (connected ? 'Copilot Bridge' : '连接中…');
+  // 标题下拉：同项目有多个会话时可用
+  const titleEnabled = titleMenuList.length > 1;
 
   return (
     <FluentProvider theme={baseTheme} style={{ height: '100%' }}>
@@ -1319,34 +1093,20 @@ export default function App() {
               <div className={appStyles_.titleMenu}>
                 {titleMenuList.map((s) => (
                   <button
-                    key={s.sessionId}
+                    key={s.resource}
                     className={
-                      s.sessionId === activeSessionId
+                      s.resource === activeSessionId
                         ? `${appStyles_.titleMenuItem} ${appStyles_.titleMenuItemActive}`
                         : appStyles_.titleMenuItem
                     }
-                    onClick={() => pickFromTitle(s.sessionId)}
+                    onClick={() => pickFromTitle(s.resource)}
                   >
-                    {s.title || s.sessionId.slice(0, 8)}
+                    {s.title || s.resource.slice(0, 8)}
                   </button>
                 ))}
               </div>
             )}
           </div>
-          <button
-            className={appStyles_.iconBtn}
-            onClick={handleNewSession}
-            disabled={isDraft || !activeProject}
-            style={
-              isDraft || !activeProject
-                ? { opacity: 0.4, cursor: 'default' }
-                : undefined
-            }
-            aria-label="新建会话"
-            title="新建会话"
-          >
-            <AddIcon fontSize={18} />
-          </button>
           {/* 点击外部关闭标题下拉 */}
           {titleMenuOpen && (
             <div
@@ -1359,7 +1119,7 @@ export default function App() {
           <div className={appStyles_.error}>
             <span style={{ flex: 1 }}>{error}</span>
             <button
-              onClick={() => useDemoStore.setState({ error: null })}
+              onClick={() => useAhpStore.setState({ error: null })}
               style={{
                 background: 'transparent',
                 border: 0,
@@ -1378,7 +1138,8 @@ export default function App() {
             messages={messages}
             running={running}
             hasSession={!!activeSessionId}
-            isDraft={isDraft}
+            canLoadOlder={canLoadOlder}
+            loadingOlder={loadingOlder}
           />
           <InputFooter />
         </div>

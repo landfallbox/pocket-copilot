@@ -1,431 +1,305 @@
 import { create } from 'zustand';
+import {
+  AhpClient,
+  type Subscription,
+} from '@microsoft/agent-host-protocol/client';
+import { WebSocketTransport } from '@microsoft/agent-host-protocol/ws';
+import {
+  ActionType,
+  MessageKind,
+  PendingMessageKind,
+  SUPPORTED_PROTOCOL_VERSIONS,
+  chatReducer,
+  type ChatAction,
+  type ChatState,
+  type SessionState,
+  type SessionSummary,
+} from '@microsoft/agent-host-protocol';
 
-/** 与主服务 BridgeEvent 同构（只声明 demo 用到的字段） */
-type Tool = {
-  toolId?: string;
-  toolCallId?: string;
-  message?: string;
-  pastTenseMessage?: string;
-  isComplete?: boolean;
-};
-export type Item =
-  | { type: 'user'; text: string; ts?: number }
-  // text：replay 路径后端 fullState items 用此字段；delta：流式 chunk 增量
-  | { type: 'thinking'; id?: string; delta?: string; text?: string }
-  | { type: 'text'; text?: string }
-  | { type: 'tool_call'; tool?: Tool }
-  | { type: 'question'; question?: { title?: string; message?: string; options?: string[] } }
-  | { type: 'edit'; edit?: { fsPath?: string } }
-  | {
-      type: 'status';
-      elapsedMs?: number;
-      promptTokens?: number;
-      completionTokens?: number;
-    };
-export type RequestState = {
-  requestId: string;
-  ts: number;
-  userText: string;
-  items: Item[];
-  done: boolean;
-};
-/** 模型选项（与后端 ModelChoice 同构） */
-export type ModelChoice = {
-  identifier: string;
-  name: string;
-  supportsReasoningEffort?: string[];
-};
+// ============================================================================
+// = AHP 状态镜像                                                              =
+// PWA 是 VS Code Agents 窗口的"第二块屏"：
+// - 读路径：订阅根通道（会话列表）+ 活动会话的 chat 通道；
+//   ChatState 由官方 chatReducer 纯函数维护（快照 + live action 增量）
+// - 写路径（M2）：dispatch chat/pendingMessageSet 排队消息，
+//   宿主在合适时机消费（空闲立即开 turn，忙碌时排到当前 turn 之后）
+// 数据面直连 agent host（ws://<host>:8081?tkn=<token>），bridge 只提供
+// 静态文件与 /api/config（端口 + token）。
+// ============================================================================
 
-export type SessionState = {
-  sessionId: string;
-  model?: string;
-  /** 模型 identifier（写路径匹配 UIA 选项用） */
-  modelIdentifier?: string;
-  /** Agent 模式（agent/ask/plan） */
-  mode?: string;
-  /** 思考程度（low/medium/xhigh） */
-  thinkingLevel?: string;
-  lastActivity: number;
-  /** 项目名（用于侧边栏分组） */
-  project?: string;
-  /** 会话标题（Copilot 生成；无则前端回退 sessionId 前缀） */
-  title?: string;
-  requests: Map<string, RequestState>;
-  order: string[];
-};
+type Phase = 'boot' | 'no-token' | 'connecting' | 'connected' | 'error';
 
-type DemoStore = {
-  connected: boolean;
-  sessions: Map<string, SessionState>;
-  activeSessionId: string | null;
-  /** 递增版本号，驱动 React 重渲染（Map 内容变更不触发引用变化） */
-  version: number;
-  /** 后端上报的错误（如 systemTail 解析失败），非空时顶部显示 banner */
+type AhpStore = {
+  phase: Phase;
+  /** 连接错误/提示（非空时顶部 banner 展示） */
   error: string | null;
-  /** 写路径：发送中（send_message 已发出、send_result 未回执） */
-  sending: boolean;
-  /** 模型列表（chatLanguageModels.json，前端模型下拉 + thinking 档位） */
-  modelList: ModelChoice[];
-  /** 移动端当前选择（发消息时发给后端改 PC 端）：跟随激活会话，用户可改 */
-  selMode?: string;
-  selModelId?: string;
-  selThinking?: string;
-  /** 用户是否手动改过当前会话的选择（true 时不跟随后端会话值） */
-  selDirty: boolean;
-  /** 新建会话草稿：非 null 时处于 draft 模式（纯前端，未触发 PC 操作） */
-  draftProject: string | null;
-  /** draft 模式下的乐观用户消息（发送后到 session_list 带回前的过渡显示） */
-  draftMessages: Array<{ id: string; role: 'user'; text: string }>;
-  /** create_and_send 成功后等待 session_list 带回新会话（保留旧会话视图避免闪空） */
-  awaitingNewSession: boolean;
+  /** 会话列表（listSessions + sessionAdded/Removed/SummaryChanged 维护） */
+  sessions: SessionSummary[];
+  /** 活动会话 URI（ahp-session:/<uuid>） */
+  activeSessionId: string | null;
+  /** 正在加载会话（订阅 session + chat 通道中） */
+  selecting: boolean;
+  /** 活动 chat 的状态（快照 + chatReducer 增量） */
+  chatState: ChatState | null;
+  /** 正在加载更早历史（fetchTurns 进行中） */
+  loadingOlder: boolean;
+  /** 递增版本号，驱动 React 重渲染 */
+  version: number;
 };
 
-export const useDemoStore = create<DemoStore>(() => ({
-  connected: false,
-  sessions: new Map(),
-  activeSessionId: null,
-  version: 0,
+export const useAhpStore = create<AhpStore>(() => ({
+  phase: 'boot',
   error: null,
-  sending: false,
-  modelList: [],
-  selMode: undefined,
-  selModelId: undefined,
-  selThinking: undefined,
-  selDirty: false,
-  draftProject: null,
-  draftMessages: [],
-  awaitingNewSession: false,
+  sessions: [],
+  activeSessionId: null,
+  selecting: false,
+  chatState: null,
+  loadingOlder: false,
+  version: 0,
 }));
 
-const bump = () => useDemoStore.setState((s) => ({ version: s.version + 1 }));
+const bump = () => useAhpStore.setState((s) => ({ version: s.version + 1 }));
 
-function ensureSession(sessionId: string): SessionState {
-  const s = useDemoStore.getState();
-  let sess = s.sessions.get(sessionId);
-  if (!sess) {
-    sess = { sessionId, lastActivity: Date.now(), requests: new Map(), order: [] };
-    s.sessions.set(sessionId, sess);
-  }
-  return sess;
-}
+// ---------------------------------------------------------------------------
+// 连接管理
+// ---------------------------------------------------------------------------
 
-function ensureRequest(sess: SessionState, requestId: string): RequestState {
-  let r = sess.requests.get(requestId);
-  if (!r) {
-    r = { requestId, ts: Date.now(), userText: '', items: [], done: false };
-    sess.requests.set(requestId, r);
-    sess.order.push(requestId);
-  }
-  return r;
-}
-
-function handleEvent(e: Record<string, any>) {
-  if (e.type === 'error') {
-    useDemoStore.setState({ error: e.message ?? '未知错误' });
-    return;
-  }
-
-  if (e.type === 'model_list') {
-    useDemoStore.setState({ modelList: e.models ?? [] });
-    return;
-  }
-
-  if (e.type === 'send_result') {
-    // 写路径回执：成功时消息会经 jsonl/heimdall 读路径自然回流，无需本地插入
-    if (!e.ok) {
-      useDemoStore.setState({
-        sending: false,
-        error: e.error ?? '发送失败',
-      });
-    } else {
-      // 成功：保留 draft 视图（继续显示用户消息），等 session_list 带回新会话再切换
-      const s = useDemoStore.getState();
-      if (s.draftProject) {
-        useDemoStore.setState({
-          sending: false,
-          awaitingNewSession: true,
-        });
-        bump();
-      } else {
-        useDemoStore.setState({ sending: false });
-      }
-    }
-    return;
-  }
-
-  if (e.type === 'hello' || e.type === 'session_list') {
-    for (const sum of e.sessions ?? []) {
-      const sess = ensureSession(sum.sessionId);
-      sess.lastActivity = sum.lastActivity ?? Date.now();
-      if (sum.model) sess.model = sum.model;
-      if (sum.modelIdentifier) sess.modelIdentifier = sum.modelIdentifier;
-      if (sum.mode) sess.mode = sum.mode;
-      if (sum.thinkingLevel) sess.thinkingLevel = sum.thinkingLevel;
-      if (sum.project) sess.project = sum.project;
-      if (sum.title) sess.title = sum.title;
-    }
-    // 自动选中最近活跃的会话（含 awaitingNewSession 时切换到新会话）
-    const s2 = useDemoStore.getState();
-    const isAwaiting = s2.awaitingNewSession;
-    const shouldSwitch = !s2.activeSessionId || isAwaiting;
-    if (shouldSwitch && s2.sessions.size > 0) {
-      const first = [...s2.sessions.values()].sort(
-        (a, b) => b.lastActivity - a.lastActivity,
-      )[0];
-      // awaitingNewSession 时要求新会话 id 不同于当前（否则说明新会话还没出现，继续等）
-      if (isAwaiting && first.sessionId === s2.activeSessionId) {
-        // 新会话尚未出现在列表中，保持等待
-      } else {
-        useDemoStore.setState({
-          activeSessionId: first.sessionId,
-          awaitingNewSession: false,
-          // 切到新会话时清 draft（新会话已接管视图）
-          draftProject: null,
-          draftMessages: [],
-        });
-        syncSelection(first.sessionId);
-        // awaitingNewSession 切换：新会话数据正经 broadcast 流式到达（user_message/chunk/
-        // request_done 已按序广播给所有客户端，前端对任意会话都处理）。此时发 replay 会用
-        // fullState 重置本地流式状态，导致首条回复"一次性全出来"而非流式。
-        // 仅初始 auto-select（!activeSessionId，数据不在本地）才需 replay 拉全量。
-        if (!isAwaiting) {
-          ws?.send(JSON.stringify({ type: 'replay', sessionId: first.sessionId }));
-        }
-      }
-    }
-    // 激活会话三值更新：未手动改过则跟随 PC 端
-    syncSelIfClean();
-    bump();
-    return;
-  }
-
-  if (e.type === 'replay') {
-    const sess = ensureSession(e.sessionId);
-    if (e.model) sess.model = e.model;
-    if (e.modelIdentifier) sess.modelIdentifier = e.modelIdentifier;
-    if (e.mode) sess.mode = e.mode;
-    if (e.thinkingLevel) sess.thinkingLevel = e.thinkingLevel;
-    if (e.title) sess.title = e.title;
-    sess.lastActivity = e.lastActivity ?? Date.now();
-    sess.requests = new Map();
-    sess.order = [];
-    for (const req of e.requests ?? []) {
-      sess.requests.set(req.requestId, req);
-      sess.order.push(req.requestId);
-    }
-    syncSelIfClean();
-    bump();
-    return;
-  }
-
-  if (e.type === 'session') {
-    const sess = ensureSession(e.sessionId);
-    if (e.model) sess.model = e.model;
-    if (e.mode) sess.mode = e.mode;
-    if (e.thinkingLevel) sess.thinkingLevel = e.thinkingLevel;
-    if (e.title) sess.title = e.title;
-    syncSelIfClean();
-    bump();
-    return;
-  }
-
-  const sess = ensureSession(e.sessionId);
-  sess.lastActivity = Date.now();
-  const r = ensureRequest(sess, e.requestId);
-
-  if (e.type === 'user_message') {
-    r.ts = e.ts ?? Date.now();
-    r.userText = e.text;
-    r.items.push({ type: 'user', text: e.text, ts: e.ts });
-  } else if (e.type === 'chunk') {
-    if (e.kind === 'thinking') {
-      // 增长快照：replace 时原位替换同 id 的 thinking 项，否则追加
-      if (e.replace && e.chunkId) {
-        const ex = r.items.find(
-          (it) => it.type === 'thinking' && it.id === e.chunkId,
-        );
-        if (ex && ex.type === 'thinking') {
-          ex.delta = e.delta ?? '';
-        } else {
-          r.items.push({ type: 'thinking', id: e.chunkId, delta: e.delta ?? '' });
-        }
-      } else {
-        r.items.push({ type: 'thinking', id: e.chunkId, delta: e.delta ?? '' });
-      }
-    } else if (e.kind === 'text') {
-      // 连续 text chunk 合并到末项：行内代码反引号可能跨 chunk 拆分，
-      // 拆成多个 item 各自独立渲染会配对失败（孤立 ` / 错位行内代码）。
-      const last = r.items[r.items.length - 1];
-      if (last && last.type === 'text') {
-        last.text = (last.text ?? '') + (e.delta ?? '');
-      } else {
-        r.items.push({ type: 'text', text: e.delta ?? '' });
-      }
-    } else if (e.kind === 'tool_call') {
-      r.items.push({ type: 'tool_call', tool: e.tool });
-    } else if (e.kind === 'question') {
-      r.items.push({ type: 'question', question: e.question });
-    } else if (e.kind === 'edit') {
-      r.items.push({ type: 'edit', edit: e.edit });
-    }
-  } else if (e.type === 'request_done') {
-    r.items = e.items ?? r.items;
-    r.done = true;
-  }
-  bump();
-}
-
-let ws: WebSocket | null = null;
+let client: AhpClient | null = null;
+let rootSub: Subscription | null = null;
+let sessionSub: Subscription | null = null;
+let chatSub: Subscription | null = null;
+let activeChatUri: string | null = null;
 let started = false;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-export function startConnection() {
+export function startConnection(): void {
   if (started) return;
   started = true;
-  connect();
+  void connect();
 }
 
-/** 把指定会话的三值同步到移动端选择（切换会话时调用，重置 dirty） */
-function syncSelection(sessionId: string) {
-  const s = useDemoStore.getState();
-  const sess = s.sessions.get(sessionId);
-  if (!sess) return;
-  useDemoStore.setState({
-    selMode: sess.mode,
-    selModelId: sess.modelIdentifier,
-    selThinking: sess.thinkingLevel,
-    selDirty: false,
-  });
-}
+async function connect(): Promise<void> {
+  const set = useAhpStore.setState;
+  try {
+    set({ phase: 'boot', error: null });
 
-/** 激活会话三值更新且用户未手动改过 → 跟随 PC 端 */
-function syncSelIfClean() {
-  const s = useDemoStore.getState();
-  if (s.selDirty || !s.activeSessionId) return;
-  const sess = s.sessions.get(s.activeSessionId);
-  if (!sess) return;
-  useDemoStore.setState({
-    selMode: sess.mode,
-    selModelId: sess.modelIdentifier,
-    selThinking: sess.thinkingLevel,
-  });
-}
+    // 1. 从 bridge 取 agent host 端口 + token
+    const cfg = (await fetch('/api/config').then((r) => r.json())) as {
+      agentHostPort: number;
+      token: string | null;
+    };
+    if (!cfg.token) {
+      set({
+        phase: 'no-token',
+        error: '未找到连接 token，请先用 launch-vscode-ahp.cmd 启动 VS Code',
+      });
+      return;
+    }
 
-/** 移动端手动选择 Agent 模式（发消息时生效） */
-export function pickMode(mode: string) {
-  useDemoStore.setState({ selMode: mode, selDirty: true });
-}
-
-/** 移动端手动选择模型（发消息时生效）；切换后若当前思考程度不在新模型支持范围则回退 */
-export function pickModel(identifier: string) {
-  const s = useDemoStore.getState();
-  const model = s.modelList.find((m) => m.identifier === identifier);
-  const efforts = model?.supportsReasoningEffort ?? [];
-  let thinking = s.selThinking;
-  if (efforts.length > 0 && thinking && !efforts.includes(thinking)) {
-    thinking = efforts.includes('medium') ? 'medium' : efforts[0];
-  }
-  useDemoStore.setState({ selModelId: identifier, selThinking: thinking, selDirty: true });
-}
-
-/** 移动端手动选择思考程度（发消息时生效） */
-export function pickThinking(level: string) {
-  useDemoStore.setState({ selThinking: level, selDirty: true });
-}
-
-/** 切换会话：设置激活 id 并请求服务端 replay（重复点击同一会话不重发）；切走时清 draft（放弃新建） */
-export function selectSession(sessionId: string) {
-  const s = useDemoStore.getState();
-  // 切到已有会话 = 放弃当前新建草稿 + 取消等待新会话（用户手动选择优先）
-  if (s.draftProject || s.awaitingNewSession) {
-    useDemoStore.setState({
-      draftProject: null,
-      draftMessages: [],
-      awaitingNewSession: false,
+    // 2. 直连 agent host（与页面同源 hostname，手机走 Tailscale IP 时同样成立）
+    set({ phase: 'connecting' });
+    const url = `ws://${location.hostname}:${cfg.agentHostPort}?tkn=${cfg.token}`;
+    const transport = await WebSocketTransport.connect(url);
+    const c = new AhpClient(transport);
+    client = c;
+    c.connect();
+    await c.initialize({
+      clientId: 'copilot-bridge-pwa',
+      protocolVersions: SUPPORTED_PROTOCOL_VERSIONS,
+      initialSubscriptions: ['ahp-root://'],
     });
+    set({ phase: 'connected' });
+
+    // 3. 根通道：会话列表变化
+    rootSub = c.attachSubscription('ahp-root://');
+    void consumeRoot(rootSub);
+
+    // 4. 初始会话列表（服务端按最近修改排序），自动选中最近一个
+    const res = await c.request('listSessions', { channel: 'ahp-root://' });
+    set({ sessions: res.items });
+    const first = res.items[0];
+    if (first) await selectSession(first.resource);
+
+    // 5. 连接断开 → 提示并定时重连
+    void (async () => {
+      for await (const st of c.stateChanges()) {
+        if (st.status === 'closed' && st.reason.type !== 'shutdown') {
+          await teardown();
+          set({
+            phase: 'error',
+            error: '与 VS Code 的连接已断开，正在重试…',
+          });
+          scheduleReconnect();
+        }
+      }
+    })();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    set({ phase: 'error', error: `无法连接 VS Code agent host：${msg}` });
+    scheduleReconnect();
+  }
+}
+
+function scheduleReconnect(): void {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    void connect();
+  }, 3000);
+}
+
+async function teardown(): Promise<void> {
+  rootSub = null;
+  sessionSub = null;
+  chatSub = null;
+  activeChatUri = null;
+  const c = client;
+  client = null;
+  if (c) {
+    try {
+      await c.shutdown();
+    } catch {
+      // 忽略关闭中的二次错误
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 根通道：会话列表
+// ---------------------------------------------------------------------------
+
+async function consumeRoot(sub: Subscription): Promise<void> {
+  for await (const ev of sub) {
+    const s = useAhpStore.getState();
+    if (ev.type === 'sessionAdded') {
+      const summary = ev.params.summary;
+      if (!s.sessions.some((x) => x.resource === summary.resource)) {
+        useAhpStore.setState({ sessions: [summary, ...s.sessions] });
+        // 尚无活动会话时跟随最新会话
+        if (!s.activeSessionId) void selectSession(summary.resource);
+      }
+    } else if (ev.type === 'sessionRemoved') {
+      const id = ev.params.session;
+      const wasActive = s.activeSessionId === id;
+      useAhpStore.setState({
+        sessions: s.sessions.filter((x) => x.resource !== id),
+        ...(wasActive ? { activeSessionId: null, chatState: null } : {}),
+      });
+      if (wasActive) {
+        activeChatUri = null;
+        chatSub = null;
+      }
+    } else if (ev.type === 'sessionSummaryChanged') {
+      const id = ev.params.session;
+      const changes = ev.params.changes;
+      useAhpStore.setState({
+        sessions: s.sessions.map((x) =>
+          x.resource === id ? { ...x, ...changes } : x,
+        ),
+      });
+    }
     bump();
   }
-  if (s.activeSessionId === sessionId) return;
-  useDemoStore.setState({ activeSessionId: sessionId });
-  syncSelection(sessionId);
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'replay', sessionId }));
+}
+
+// ---------------------------------------------------------------------------
+// 会话 / chat 通道
+// ---------------------------------------------------------------------------
+
+/** 选中会话：订阅 session 通道拿 defaultChat，再订阅 chat 通道拿 ChatState */
+export async function selectSession(sessionId: string): Promise<void> {
+  const s = useAhpStore.getState();
+  if (!client || s.activeSessionId === sessionId) return;
+  useAhpStore.setState({ selecting: true, chatState: null });
+  try {
+    // 释放上一个 chat 订阅
+    if (activeChatUri) {
+      try {
+        await client.unsubscribe(activeChatUri);
+      } catch {
+        // 忽略
+      }
+      chatSub = null;
+      activeChatUri = null;
+    }
+
+    const sessionRes = await client.subscribe(sessionId);
+    sessionSub = sessionRes.subscription;
+    const snap = sessionRes.result.snapshot;
+    const sessionState = snap?.state as SessionState | undefined;
+    const chatUri =
+      sessionState?.defaultChat ?? sessionState?.chats[0]?.resource ?? null;
+    if (!chatUri) {
+      useAhpStore.setState({
+        activeSessionId: sessionId,
+        chatState: null,
+        selecting: false,
+      });
+      return;
+    }
+
+    const chatRes = await client.subscribe(chatUri);
+    chatSub = chatRes.subscription;
+    activeChatUri = chatUri;
+    const chatSnap = chatRes.result.snapshot?.state as ChatState | undefined;
+    useAhpStore.setState({
+      activeSessionId: sessionId,
+      chatState: chatSnap ?? null,
+      selecting: false,
+    });
+    if (chatSnap) void consumeChat(chatSub, chatUri);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    useAhpStore.setState({ selecting: false, error: `加载会话失败：${msg}` });
   }
 }
 
-/** 进入新建会话草稿（纯前端，不触发 PC 操作；首条消息发送时才真正建会话） */
-export function startDraft(project: string) {
-  useDemoStore.setState({ draftProject: project, draftMessages: [] });
-  bump();
+/** chat 通道 live action → 官方 chatReducer 纯函数增量更新 */
+async function consumeChat(sub: Subscription, chatUri: string): Promise<void> {
+  for await (const ev of sub) {
+    if (ev.type !== 'action' || ev.params.channel !== chatUri) continue;
+    const cs = useAhpStore.getState().chatState;
+    if (!cs) continue;
+    const next = chatReducer(cs, ev.params.action as ChatAction);
+    if (next !== cs) useAhpStore.setState({ chatState: next });
+  }
 }
 
-/** 退出新建会话草稿（切到已有会话 / 发送成功后调用） */
-export function clearDraft() {
-  const s = useDemoStore.getState();
-  if (!s.draftProject) return;
-  useDemoStore.setState({ draftProject: null, draftMessages: [] });
-  bump();
-}
+// ---------------------------------------------------------------------------
+// 写路径
+// ---------------------------------------------------------------------------
 
 /**
- * 写路径：发送消息。
- * - draft 模式：发 create_and_send（bridge 经 UIA 点 New Chat 建会话 + 注入首条）
- * - 正常模式：发 send_message（bridge 经 UIA 切会话 + 注入）
+ * 发送消息 = dispatch 一条排队消息。
+ * 宿主行为：chat 空闲时立即消费开新 turn；当前 turn 进行中则排队，
+ * turn 结束后自动作为新 turn 发出（与 Agents 窗口"排队发送"一致）。
+ * 回显经 chat/pendingMessageSet action 走订阅回流，由 chatReducer 更新状态。
  */
-export function sendMessage(text: string) {
-  const s = useDemoStore.getState();
-  if (s.sending || ws?.readyState !== WebSocket.OPEN) return;
-  useDemoStore.setState({ sending: true, error: null });
-  if (s.draftProject) {
-    // 新建会话：首条消息触发 PC 建会话
-    useDemoStore.setState({
-      draftMessages: [{ id: 'draft-user', role: 'user', text }],
-    });
-    bump();
-    ws.send(
-      JSON.stringify({
-        type: 'create_and_send',
-        project: s.draftProject,
-        text,
-        mode: s.selMode,
-        modelIdentifier: s.selModelId,
-        thinkingLevel: s.selThinking,
-      }),
-    );
-    return;
-  }
-  const id = s.activeSessionId;
-  if (!id) return;
-  ws.send(
-    JSON.stringify({
-      type: 'send_message',
-      sessionId: id,
-      text,
-      mode: s.selMode,
-      modelIdentifier: s.selModelId,
-      thinkingLevel: s.selThinking,
-    }),
-  );
+export function sendMessage(text: string): void {
+  if (!client || !activeChatUri || !text.trim()) return;
+  client.dispatch(activeChatUri, {
+    type: ActionType.ChatPendingMessageSet,
+    kind: PendingMessageKind.Queued,
+    id: crypto.randomUUID(),
+    message: { text, origin: { kind: MessageKind.User } },
+  });
 }
 
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  // bridge 的 WebSocketServer 监听 /ws 路径（见 server.ts），直连需带该路径
-  ws = new WebSocket(`${proto}://127.0.0.1:8765/ws`);
-  ws.onopen = () => {
-    useDemoStore.setState({ connected: true });
-    const id = useDemoStore.getState().activeSessionId;
-    if (id) ws?.send(JSON.stringify({ type: 'replay', sessionId: id }));
-  };
-  ws.onmessage = (m) => {
-    try {
-      handleEvent(JSON.parse(m.data));
-    } catch (err) {
-      console.error('bad message', err);
-    }
-  };
-  ws.onclose = () => {
-    useDemoStore.setState({ connected: false });
-    setTimeout(connect, 1000);
-  };
-  ws.onerror = () => ws?.close();
+/** 加载更早历史：fetchTurns 请求，数据经 chat/turnsLoaded 回流由 chatReducer 处理 */
+export async function loadOlder(): Promise<void> {
+  const s = useAhpStore.getState();
+  if (!client || !activeChatUri || !s.chatState?.turnsNextCursor || s.loadingOlder)
+    return;
+  useAhpStore.setState({ loadingOlder: true });
+  try {
+    await client.request('fetchTurns', {
+      channel: activeChatUri,
+      cursor: s.chatState.turnsNextCursor,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    useAhpStore.setState({ error: `加载历史失败：${msg}` });
+  } finally {
+    useAhpStore.setState({ loadingOlder: false });
+  }
 }

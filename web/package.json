@@ -9,6 +9,7 @@
   "dependencies": {
     "@fluentui/react-components": "^9.74.7",
     "@fluentui/react-icons": "^2.0.339",
+    "@microsoft/agent-host-protocol": "^0.9.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
