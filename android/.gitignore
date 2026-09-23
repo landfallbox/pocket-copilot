@@ -1,0 +1,14 @@
+# Gradle
+.gradle/
+build/
+app/build/
+
+# 本地环境（SDK 路径等，机器相关）
+local.properties
+
+# IDE
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
