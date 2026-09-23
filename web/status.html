@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>copilot-bridge 状态</title>
+<style>
+  :root {
+    --bg: #111318;
+    --card: #1a1d24;
+    --card2: #20242e;
+    --text: #e6e9ef;
+    --dim: #8b93a3;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --err: #f85149;
+    --accent: #58a6ff;
+    --border: #2a2f3a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    padding: 20px;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--dim); font-size: 12px; margin-bottom: 16px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 14px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card h2 {
+    font-size: 13px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    display: inline-block; flex: none;
+  }
+  .dot.ok { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .dot.err { background: var(--err); box-shadow: 0 0 6px var(--err); }
+  .dot.warn { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 3px 0; vertical-align: top; }
+  td.k { color: var(--dim); width: 42%; }
+  td.v { word-break: break-all; }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    background: var(--card2);
+    border: 1px solid var(--border);
+  }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  .badge.err { color: var(--err); border-color: var(--err); }
+  .badge.warn { color: var(--warn); border-color: var(--warn); }
+  .session {
+    padding: 8px 10px;
+    background: var(--card2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+  }
+  .session .t { font-weight: 600; }
+  .session .m { color: var(--dim); font-size: 12px; margin-top: 2px; }
+  .empty { color: var(--dim); font-size: 13px; padding: 8px 0; }
+  .full { grid-column: 1 / -1; }
+  footer { margin-top: 16px; color: var(--dim); font-size: 12px; }
+  .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+  <h1>copilot-bridge daemon</h1>
+  <div class="sub" id="sub">加载中…</div>
+
+  <div class="grid">
+    <div class="card">
+      <h2><span class="dot ok" id="dot-daemon"></span>daemon</h2>
+      <table id="tbl-daemon"></table>
+    </div>
+
+    <div class="card">
+      <h2><span class="dot" id="dot-ahp"></span>AHP 链路（agent host）</h2>
+      <table id="tbl-ahp"></table>
+    </div>
+
+    <div class="card">
+      <h2><span class="dot" id="dot-phone"></span>手机连接（<span id="phone-count">0</span>）</h2>
+      <div id="phones"></div>
+    </div>
+
+    <div class="card">
+      <h2>焦点会话视图</h2>
+      <div id="focus"></div>
+    </div>
+
+    <div class="card full">
+      <h2>会话列表（<span id="session-count">0</span>）</h2>
+      <div id="sessions"></div>
+    </div>
+  </div>
+
+  <footer>每 2 秒自动刷新 · <span id="updated"></span></footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function row(k, v) {
+  return '<tr><td class="k">' + k + '</td><td class="v">' + v + '</td></tr>';
+}
+function dot(id, cls) {
+  const el = $(id);
+  el.className = 'dot ' + cls;
+}
+function fmtUptime(sec) {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return (d > 0 ? d + '天' : '') + h + '时' + m + '分' + s + '秒';
+}
+const STATUS_BADGE = {
+  inProgress: ['ok', '运行中'],
+  inputNeeded: ['warn', '等待输入'],
+  error: ['err', '错误'],
+  archived: ['', '已归档'],
+  idle: ['', '空闲'],
+};
+function statusBadge(s) {
+  const [cls, label] = STATUS_BADGE[s] || ['', s || '未知'];
+  return '<span class="badge ' + cls + '">' + esc(label) + '</span>';
+}
+
+async function refresh() {
+  try {
+    const res = await fetch('/api/status', { cache: 'no-store' });
+    const d = await res.json();
+
+    // daemon
+    dot('dot-daemon', 'ok');
+    $('tbl-daemon').innerHTML =
+      row('PID', '<span class="mono">' + d.pid + '</span>') +
+      row('运行时长', fmtUptime(d.uptimeSec)) +
+      row('启动时间', d.startedAt.replace('T', ' ').slice(0, 19)) +
+      row('端口', d.port);
+    $('sub').textContent = '运行中 · 端口 ' + d.port + ' · PID ' + d.pid;
+
+    // AHP
+    const ahpOk = d.ahp.connected;
+    dot('dot-ahp', ahpOk ? 'ok' : 'err');
+    $('tbl-ahp').innerHTML =
+      row('连接状态', ahpOk
+        ? '<span class="badge ok">已连接</span>'
+        : '<span class="badge err">未连接（重连中）</span>') +
+      row('agent host 端口', d.ahp.agentHostPort) +
+      row('焦点会话', d.ahp.focusSessionId
+        ? '<span class="mono">' + esc(d.ahp.focusSessionId) + '</span>'
+        : '<span class="dim">无</span>');
+
+    // 手机
+    const phones = d.phones || [];
+    $('phone-count').textContent = phones.length;
+    dot('dot-phone', phones.length > 0 ? 'ok' : 'warn');
+    $('phones').innerHTML = phones.length
+      ? phones.map((p) =>
+          '<div class="session"><div class="t">' + esc(p.name) + '</div>' +
+          '<div class="m">连接于 ' + esc(p.connectedAt.replace('T', ' ').slice(0, 19)) +
+          ' · ' + (p.alive ? '心跳正常' : '心跳超时') + '</div></div>'
+        ).join('')
+      : '<div class="empty">暂无手机连接</div>';
+
+    // 焦点视图
+    const f = d.focus;
+    $('focus').innerHTML = f
+      ? '<table>' +
+          row('会话', '<span class="mono">' + esc(f.id) + '</span>') +
+          row('流式输出', f.streaming
+            ? '<span class="badge ok">进行中</span>'
+            : '<span class="badge">空闲</span>') +
+          row('消息数', f.messageCount) +
+          row('排队消息', f.pendingCount) +
+        '</table>'
+      : '<div class="empty">无焦点会话视图（AHP 未连接或无 chat）</div>';
+
+    // 会话列表
+    const sessions = d.sessions || [];
+    $('session-count').textContent = sessions.length;
+    $('sessions').innerHTML = sessions.length
+      ? sessions.map((s) => {
+          const focusMark =
+            s.id === d.ahp.focusSessionId
+              ? ' <span class="badge ok">焦点</span>'
+              : '';
+          return (
+            '<div class="session"><div class="t">' +
+            esc(s.title || s.id) + focusMark + '</div>' +
+            '<div class="m">' +
+            statusBadge(s.status) +
+            (s.activity ? ' · ' + esc(s.activity) : '') +
+            (s.project ? ' · ' + esc(s.project) : '') +
+            (s.modifiedAt ? ' · ' + esc(s.modifiedAt.replace('T', ' ').slice(0, 19)) : '') +
+            '</div></div>'
+          );
+        }).join('')
+      : '<div class="empty">暂无会话（AHP 未连接时为空）</div>';
+
+    $('updated').textContent = '更新于 ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    dot('dot-daemon', 'err');
+    $('sub').textContent = '无法连接 daemon：' + e.message;
+  }
+}
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

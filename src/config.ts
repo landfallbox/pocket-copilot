@@ -25,6 +25,9 @@ export const AGENT_HOST_PORT = Number(process.env.AGENT_HOST_PORT ?? 8081);
  */
 export const TOKEN_FILE = path.join(os.homedir(), '.copilot-bridge', 'token.txt');
 
+/** 已配对设备 token 文件（手机配对用） */
+export const DEVICES_FILE = path.join(os.homedir(), '.copilot-bridge', 'devices.json');
+
 /** 读取 agent host 连接 token（文件不存在/为空返回 null） */
 export async function readAgentHostToken(): Promise<string | null> {
   try {
@@ -42,4 +45,12 @@ export const WEB_ROOT = path.resolve(
   '..',
   'web',
   'dist',
+);
+
+/** 状态页（自包含单文件，无需构建） */
+export const STATUS_PAGE = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'web',
+  'status.html',
 );

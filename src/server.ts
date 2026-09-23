@@ -1,18 +1,188 @@
+// ============================================================================
+// = copilot-bridge daemon 入口                                                 =
+// 职责：                                                                          =
+//   1. 连接 agent host（AHP），镜像焦点会话状态（AhpConnection + AhpMirror）     =
+//   2. 暴露简化手机协议（WS /ws），鉴权 + 视图快照节流推送（PhoneHub）           =
+//   3. 静态托管前端（web/dist，调试期）+ /api/pair 配对 + /api/health            =
+// 原始 AHP token 只在本进程内使用，不出电脑。                                     =
+// ============================================================================
+
 import http from 'node:http';
-import net from 'node:net';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import fsp from 'node:fs/promises';
+import { WebSocketServer } from 'ws';
+
 import {
   HOST,
   PORT,
   WEB_ROOT,
+  STATUS_PAGE,
   AGENT_HOST_PORT,
   readAgentHostToken,
 } from './config.js';
+import { AhpConnection } from './ahp/connection.js';
+import { AhpMirror } from './ahp/mirror.js';
+import { PhoneHub } from './phone/hub.js';
+import { registerDevice, qrPayload } from './phone/pairing.js';
 
-const pExecFile = promisify(execFile);
+// ---------------------------------------------------------------------------
+// AHP 链路：mirror ⇄ hub，connection 驱动
+// （hub 与 mirror 互相引用，用 let + 闭包延迟绑定，运行时才调用）
+// ---------------------------------------------------------------------------
+
+let hub: PhoneHub;
+const mirror = new AhpMirror({
+  onSessions: (s) => hub.onSessions(s),
+  onChat: (sessionId, chat) => hub.onChat(sessionId, chat),
+  onFocusChanging: (sessionId) => hub.onFocusChanging(sessionId),
+});
+hub = new PhoneHub(mirror);
+
+const connection = new AhpConnection({
+  onReady: (client) => {
+    void mirror.start(client);
+  },
+  onLost: () => {
+    mirror.stop();
+  },
+});
+
+// ---------------------------------------------------------------------------
+// HTTP + WS
+// ---------------------------------------------------------------------------
+
+const server = http.createServer((req, res) => {
+  const url = req.url ?? '/';
+
+  if (url === '/api/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        ok: true,
+        agentHostPort: AGENT_HOST_PORT,
+        ahpConnected: connection.clientOrNull !== null,
+      }),
+    );
+    return;
+  }
+
+  if (url === '/api/status') {
+    const view = hub.getLatestView();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        ok: true,
+        pid: process.pid,
+        startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+        uptimeSec: Math.floor(process.uptime()),
+        port: PORT,
+        ahp: {
+          connected: connection.clientOrNull !== null,
+          agentHostPort: AGENT_HOST_PORT,
+          focusSessionId: mirror.focusSessionId,
+        },
+        phones: hub.getPhoneStatus(),
+        sessions: hub.getSessions(),
+        focus: view
+          ? {
+              id: mirror.focusSessionId,
+              streaming: view.streaming,
+              messageCount: view.messages.length,
+              pendingCount: view.pending.length,
+            }
+          : null,
+      }),
+    );
+    return;
+  }
+
+  if (url === '/status') {
+    void (async () => {
+      try {
+        const data = await fsp.readFile(STATUS_PAGE);
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(data);
+      } catch {
+        res.writeHead(500);
+        res.end('status page missing');
+      }
+    })();
+    return;
+  }
+
+  if (url === '/api/pair') {
+    handlePair(req, res);
+    return;
+  }
+
+  if (url === '/api/config') {
+    // 兼容旧 PWA：仍返回 agent host 端口 + token
+    void (async () => {
+      const token = await readAgentHostToken();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ agentHostPort: AGENT_HOST_PORT, token }));
+    })();
+    return;
+  }
+
+  void serveStatic(req, res, url);
+});
+
+// WS upgrade：仅 /ws 走手机协议，其余拒绝
+const wss = new WebSocketServer({ noServer: true });
+server.on('upgrade', (req, socket, head) => {
+  const url = req.url ?? '';
+  console.log(`[ws] upgrade ${url} ua=${req.headers['user-agent'] ?? 'none'}`);
+  if (url === '/ws' || url.startsWith('/ws?')) {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      hub.handleConnection(ws);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+function handlePair(req: http.IncomingMessage, res: http.ServerResponse): void {
+  if (req.method !== 'POST') {
+    res.writeHead(405, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'method not allowed' }));
+    return;
+  }
+  let body = '';
+  req.on('data', (c) => {
+    body += c;
+  });
+  req.on('end', () => {
+    let name = 'phone';
+    try {
+      name = JSON.parse(body).name ?? 'phone';
+    } catch {
+      // 忽略
+    }
+    void (async () => {
+      const deviceToken = await registerDevice(name);
+      // host 由客户端指定（跨设备时传 Tailscale IP）；缺省回环
+      let host = '127.0.0.1';
+      try {
+        const h = JSON.parse(body).host;
+        if (typeof h === 'string' && h.length > 0) host = h;
+      } catch {
+        // 忽略
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          deviceToken,
+          qr: qrPayload(host, PORT, deviceToken),
+        }),
+      );
+    })();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 静态托管（调试期保留；M4 后前端为 Android App，可移除）
+// ---------------------------------------------------------------------------
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -21,115 +191,42 @@ const MIME: Record<string, string> = {
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
-  '.jpg': 'image/jpeg',
   '.ico': 'image/x-icon',
-  '.webmanifest': 'application/manifest+json; charset=utf-8',
-  '.woff2': 'font/woff2',
-  '.txt': 'text/plain; charset=utf-8',
 };
 
-/** 探测 agent host 的 TCP 端口（agent host 绑定 0.0.0.0，回环探测即可） */
-function probeAgentHost(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const sock = net.connect({ host: '127.0.0.1', port: AGENT_HOST_PORT });
-    let settled = false;
-    const done = (ok: boolean) => {
-      if (settled) return;
-      settled = true;
-      sock.destroy();
-      resolve(ok);
-    };
-    sock.once('connect', () => done(true));
-    sock.once('error', () => done(false));
-    setTimeout(() => done(false), 1000).unref();
-  });
-}
-
-/** 检查 Code.exe 进程是否存在（区分"没启动"与"没带环境变量启动"） */
-async function isCodeRunning(): Promise<boolean> {
-  try {
-    const { stdout } = await pExecFile('tasklist', [
-      '/FI',
-      'IMAGENAME eq Code.exe',
-      '/NH',
-    ]);
-    return /Code\.exe/i.test(stdout);
-  } catch {
-    return false;
+async function serveStatic(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: string,
+): Promise<void> {
+  let pathname = decodeURIComponent(url.split('?')[0]);
+  if (pathname === '/') pathname = '/index.html';
+  const filePath = path.join(WEB_ROOT, pathname);
+  if (!filePath.startsWith(WEB_ROOT)) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return;
   }
-}
-
-const server = http.createServer(async (req, res) => {
   try {
-    const url = (req.url ?? '/').split('?')[0];
-
-    if (url === '/api/config') {
-      const token = await readAgentHostToken();
-      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ agentHostPort: AGENT_HOST_PORT, token }));
-      return;
-    }
-
-    if (url === '/api/health') {
-      const up = await probeAgentHost();
-      const status = up
-        ? 'ok'
-        : (await isCodeRunning() ? 'not_started_with_env' : 'vscode_not_running');
-      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ status, agentHostPort: AGENT_HOST_PORT }));
-      return;
-    }
-
-    if (url.startsWith('/api/')) {
-      res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ error: 'not found' }));
-      return;
-    }
-
-    // 静态文件（SPA：未命中的非文件路径回退 index.html）
-    const rel = url === '/' ? 'index.html' : url.slice(1);
-    const file = path.resolve(WEB_ROOT, rel);
-    if (file !== WEB_ROOT && !file.startsWith(WEB_ROOT + path.sep)) {
-      res.writeHead(403);
-      res.end('forbidden');
-      return;
-    }
-    let data: Buffer;
-    try {
-      data = await fsp.readFile(file);
-    } catch {
-      if (path.extname(file) === '') {
-        const fallback = path.join(WEB_ROOT, 'index.html');
-        data = await fsp.readFile(fallback);
-      } else {
-        res.writeHead(404);
-        res.end('not found');
-        return;
-      }
-    }
-    const ext = path.extname(file).toLowerCase();
+    const data = await fsp.readFile(filePath);
     res.writeHead(200, {
-      'content-type': MIME[ext] ?? 'application/octet-stream',
-      'cache-control': 'no-cache',
+      'Content-Type': MIME[path.extname(filePath)] ?? 'application/octet-stream',
     });
     res.end(data);
   } catch {
-    res.writeHead(500);
-    res.end('internal error');
+    res.writeHead(404);
+    res.end('Not Found');
   }
-});
+}
+
+// ---------------------------------------------------------------------------
+// 启动
+// ---------------------------------------------------------------------------
 
 server.listen(PORT, HOST, () => {
-  console.log(`copilot-bridge listening on http://${HOST}:${PORT}`);
-  console.log(
-    `agent host: ws://<本机地址>:${AGENT_HOST_PORT}（token 文件 %USERPROFILE%\\.copilot-bridge\\token.txt）`,
-  );
+  console.log(`[bridge] daemon 已启动：http://${HOST}:${PORT}`);
+  console.log(`[bridge] 手机 WS：ws://${HOST}:${PORT}/ws`);
+  console.log(`[bridge] agent host 端口：${AGENT_HOST_PORT}`);
+  hub.start();
+  connection.start();
 });
-
-for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(sig, () => {
-    console.log(`received ${sig}, shutting down`);
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 2000).unref();
-  });
-}
