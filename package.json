@@ -13,5 +13,10 @@
     "@types/node": "^25.0.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "@microsoft/agent-host-protocol": "^0.9.0",
+    "@types/ws": "^8.18.1",
+    "ws": "^8.21.3"
   }
 }
