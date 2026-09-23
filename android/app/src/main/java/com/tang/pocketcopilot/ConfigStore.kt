@@ -1,4 +1,4 @@
-package com.tang.copilotbridge
+package com.tang.pocketcopilot
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit
@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.map
 
 /** 连接配置持久化（DataStore preferences） */
 
-private val Context.dataStore by preferencesDataStore(name = "bridge")
+private val Context.dataStore by preferencesDataStore(name = "pocket-copilot")
 
 data class ConnConfig(
     val host: String,

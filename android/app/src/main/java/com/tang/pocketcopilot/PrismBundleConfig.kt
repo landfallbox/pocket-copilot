@@ -1,4 +1,4 @@
-package com.tang.copilotbridge
+package com.tang.pocketcopilot
 
 import io.noties.prism4j.annotations.PrismBundle
 

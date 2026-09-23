@@ -1,4 +1,4 @@
-package com.tang.copilotbridge
+package com.tang.pocketcopilot
 
 import android.graphics.Typeface
 import android.text.method.LinkMovementMethod
@@ -126,7 +126,7 @@ fun ChatScreen(vm: AppViewModel) {
     }
     val displayTitle = remember(sessions, focus) {
         sessions.firstOrNull { it.id == focus }?.title?.ifBlank { null }
-            ?: if (clientState == BridgeClient.ClientState.AUTHENTICATED) "Copilot Bridge" else "连接中…"
+            ?: if (clientState == PocketClient.ClientState.AUTHENTICATED) "Pocket Copilot" else "连接中…"
     }
 
     val listState = rememberLazyListState()
@@ -242,14 +242,14 @@ fun ChatScreen(vm: AppViewModel) {
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 contentAlignment = Alignment.Center,
             ) {
-            if (clientState != BridgeClient.ClientState.AUTHENTICATED) {
+            if (clientState != PocketClient.ClientState.AUTHENTICATED) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator()
                         Spacer(Modifier.height(8.dp))
                         Text(
                             when (clientState) {
-                                BridgeClient.ClientState.CONNECTING -> "连接中…"
+                                PocketClient.ClientState.CONNECTING -> "连接中…"
                                 else -> "未连接（自动重连中）"
                             },
                             style = MaterialTheme.typography.bodyMedium,
@@ -497,11 +497,11 @@ private fun Sidebar(
 }
 
 @Composable
-private fun StatusDot(status: BridgeClient.ClientState) {
+private fun StatusDot(status: PocketClient.ClientState) {
     val color = when (status) {
-        BridgeClient.ClientState.AUTHENTICATED -> Success
-        BridgeClient.ClientState.CONNECTING -> Color(0xFFFFC107)
-        BridgeClient.ClientState.DISCONNECTED -> Color(0xFFF48771)
+        PocketClient.ClientState.AUTHENTICATED -> Success
+        PocketClient.ClientState.CONNECTING -> Color(0xFFFFC107)
+        PocketClient.ClientState.DISCONNECTED -> Color(0xFFF48771)
     }
     Box(
         modifier = Modifier

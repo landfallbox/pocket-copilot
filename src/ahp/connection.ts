@@ -10,7 +10,7 @@ import { SUPPORTED_PROTOCOL_VERSIONS } from '@microsoft/agent-host-protocol';
 import { AGENT_HOST_PORT, readAgentHostToken } from '../config.js';
 
 const RECONNECT_MS = 3000;
-const CLIENT_ID = 'copilot-bridge-daemon';
+const CLIENT_ID = 'pocket-copilot-daemon';
 
 export interface ConnectionCallbacks {
   /** 连接建立且 initialize 完成（可开始订阅） */

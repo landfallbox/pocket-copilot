@@ -1,7 +1,7 @@
 // ============================================================================
 // = 配对：deviceToken 管理 + QR 内容                                          =
 // 原始 AHP token 永不出电脑；手机只持自己的 deviceToken。                      =
-// 每台设备一个 token，持久化到 %USERPROFILE%\.copilot-bridge\devices.json。    =
+// 每台设备一个 token，持久化到 %USERPROFILE%\.pocket-copilot\devices.json。    =
 // ============================================================================
 
 import crypto from 'node:crypto';
@@ -59,5 +59,5 @@ export async function registerDevice(name: string): Promise<string> {
 
 /** 生成 QR 内容（Android deep link 解析后连 ws://<host>:<port>/ws 发 hello） */
 export function qrPayload(host: string, port: number, deviceToken: string): string {
-  return `copilot-bridge://pair?host=${encodeURIComponent(host)}&port=${port}&device=${deviceToken}`;
+  return `pocket-copilot://pair?host=${encodeURIComponent(host)}&port=${port}&device=${deviceToken}`;
 }

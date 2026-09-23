@@ -1,4 +1,4 @@
-package com.tang.copilotbridge
+package com.tang.pocketcopilot
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -21,10 +21,10 @@ import kotlinx.coroutines.launch
 
 /**
  * 前台 Service：保活连接进程 + 常驻通知展示连接状态。
- * 连接逻辑在 [BridgeController]，Service 只负责保活与状态展示。
+ * 连接逻辑在 [PocketController]，Service 只负责保活与状态展示。
  * START_STICKY：进程被系统杀掉后 Service 自动重启，onCreate 里重新 init 控制器触发重连。
  */
-class BridgeService : Service() {
+class PocketService : Service() {
 
     private var scope: CoroutineScope? = null
 
@@ -36,13 +36,13 @@ class BridgeService : Service() {
         try {
             ServiceCompat.startForeground(
                 this, NOTIF_ID,
-                buildNotification(BridgeClient.ClientState.CONNECTING),
+                buildNotification(PocketClient.ClientState.CONNECTING),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
             )
         } catch (e: RuntimeException) {
-            android.util.Log.w("BridgeService", "startForeground 失败: ${e.message}")
+            android.util.Log.w("PocketService", "startForeground 失败: ${e.message}")
         }
-        val ctl = BridgeController.get(this)
+        val ctl = PocketController.get(this)
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main).also { s ->
             s.launch {
                 val c = ctl.initOnce()
@@ -84,18 +84,18 @@ class BridgeService : Service() {
         }
     }
 
-    private fun buildNotification(state: BridgeClient.ClientState): Notification {
+    private fun buildNotification(state: PocketClient.ClientState): Notification {
         val text = when (state) {
-            BridgeClient.ClientState.AUTHENTICATED -> "已连接"
-            BridgeClient.ClientState.CONNECTING -> "连接中…"
-            BridgeClient.ClientState.DISCONNECTED -> "已断开（自动重连中）"
+            PocketClient.ClientState.AUTHENTICATED -> "已连接"
+            PocketClient.ClientState.CONNECTING -> "连接中…"
+            PocketClient.ClientState.DISCONNECTED -> "已断开（自动重连中）"
         }
         val launch = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Copilot Bridge")
+            .setContentTitle("Pocket Copilot")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.sym_def_app_icon)
             .setOngoing(true)
@@ -104,11 +104,11 @@ class BridgeService : Service() {
     }
 
     companion object {
-        private const val CHANNEL_ID = "bridge-status"
+        private const val CHANNEL_ID = "pocket-status"
         private const val NOTIF_ID = 1
 
         fun start(context: Context) {
-            context.startForegroundService(Intent(context, BridgeService::class.java))
+            context.startForegroundService(Intent(context, PocketService::class.java))
         }
     }
 }

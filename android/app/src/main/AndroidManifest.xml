@@ -10,7 +10,7 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
-        android:label="Copilot Bridge"
+        android:label="Pocket Copilot"
         android:icon="@android:drawable/sym_def_app_icon"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="true">
@@ -28,12 +28,12 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="copilot-bridge" android:host="pair" />
+                <data android:scheme="pocket-copilot" android:host="pair" />
             </intent-filter>
         </activity>
 
         <service
-            android:name=".BridgeService"
+            android:name=".PocketService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
     </application>

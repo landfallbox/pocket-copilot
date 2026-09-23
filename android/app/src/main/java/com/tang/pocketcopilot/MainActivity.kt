@@ -1,4 +1,4 @@
-package com.tang.copilotbridge
+package com.tang.pocketcopilot
 
 import android.Manifest
 import android.content.Intent
@@ -17,9 +17,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestNotificationPermission()
-        BridgeService.start(this)
+        PocketService.start(this)
         setContent {
-            BridgeRoot(vm)
+            PocketRoot(vm)
         }
         intent?.data?.let { vm.onDeepLink(it) }
     }

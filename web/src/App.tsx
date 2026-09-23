@@ -1062,7 +1062,7 @@ export default function App() {
   };
 
   // 标题显示
-  const displayTitle = activeTitle || (connected ? 'Copilot Bridge' : '连接中…');
+  const displayTitle = activeTitle || (connected ? 'Pocket Copilot' : '连接中…');
   // 标题下拉：同项目有多个会话时可用
   const titleEnabled = titleMenuList.length > 1;
 

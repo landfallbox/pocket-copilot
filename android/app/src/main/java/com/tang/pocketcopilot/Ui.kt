@@ -1,4 +1,4 @@
-package com.tang.copilotbridge
+package com.tang.pocketcopilot
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -25,7 +25,7 @@ private val VscodeDark = darkColorScheme(
 
 /** 应用根：无连接配置 → 配对屏；有配置 → 聊天屏 */
 @Composable
-fun BridgeRoot(vm: AppViewModel) {
+fun PocketRoot(vm: AppViewModel) {
     MaterialTheme(colorScheme = VscodeDark) {
         val config by vm.config.collectAsStateWithLifecycle()
         Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF121314)) {

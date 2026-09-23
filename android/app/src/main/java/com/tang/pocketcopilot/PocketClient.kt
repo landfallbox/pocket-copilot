@@ -1,4 +1,4 @@
-package com.tang.copilotbridge
+package com.tang.pocketcopilot
 
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong
  * - 断线指数退避重连（1s → 2s → 4s ... 上限 30s），重连后重新 hello
  * - 事件经 [events] 回调抛给 UI（主线程外，UI 侧自行切主线程）
  */
-class BridgeClient(
+class PocketClient(
     private val config: ConnConfig,
     private val onEvent: (DaemonEvent) -> Unit,
     private val onState: (ClientState) -> Unit,
@@ -133,6 +133,6 @@ class BridgeClient(
     }
 
     companion object {
-        private const val TAG = "BridgeClient"
+        private const val TAG = "PocketClient"
     }
 }

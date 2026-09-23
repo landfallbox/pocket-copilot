@@ -23,7 +23,7 @@ import {
 //   ChatState 由官方 chatReducer 纯函数维护（快照 + live action 增量）
 // - 写路径（M2）：dispatch chat/pendingMessageSet 排队消息，
 //   宿主在合适时机消费（空闲立即开 turn，忙碌时排到当前 turn 之后）
-// 数据面直连 agent host（ws://<host>:8081?tkn=<token>），bridge 只提供
+// 数据面直连 agent host（ws://<host>:8081?tkn=<token>），pocket-copilot 只提供
 // 静态文件与 /api/config（端口 + token）。
 // ============================================================================
 
@@ -83,7 +83,7 @@ async function connect(): Promise<void> {
   try {
     set({ phase: 'boot', error: null });
 
-    // 1. 从 bridge 取 agent host 端口 + token
+    // 1. 从 pocket-copilot 取 agent host 端口 + token
     const cfg = (await fetch('/api/config').then((r) => r.json())) as {
       agentHostPort: number;
       token: string | null;
@@ -104,7 +104,7 @@ async function connect(): Promise<void> {
     client = c;
     c.connect();
     await c.initialize({
-      clientId: 'copilot-bridge-pwa',
+      clientId: 'pocket-copilot-pwa',
       protocolVersions: SUPPORTED_PROTOCOL_VERSIONS,
       initialSubscriptions: ['ahp-root://'],
     });

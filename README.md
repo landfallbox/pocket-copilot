@@ -1,4 +1,4 @@
-# copilot-bridge
+# pocket-copilot
 
 PC VS Code Copilot 的远程镜像：在手机上远程以类原生的效果实现 PC 与移动端的 Copilot 交互体验和无感切换。
 

@@ -1,4 +1,4 @@
-package com.tang.copilotbridge
+package com.tang.pocketcopilot
 
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -58,7 +58,7 @@ fun PairingScreen(vm: AppViewModel) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Copilot Bridge", style = MaterialTheme.typography.headlineMedium)
+        Text("Pocket Copilot", style = MaterialTheme.typography.headlineMedium)
         Text(
             "扫描电脑端二维码，或手动输入连接信息",
             style = MaterialTheme.typography.bodyMedium,
@@ -117,10 +117,10 @@ private fun Spacer24() {
     androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
 }
 
-/** 解析 copilot-bridge://pair?host=..&port=..&device=.. */
+/** 解析 pocket-copilot://pair?host=..&port=..&device=.. */
 fun parsePairUri(raw: String): ConnConfig? {
     val uri = android.net.Uri.parse(raw)
-    if (uri.scheme != "copilot-bridge" || uri.host != "pair") return null
+    if (uri.scheme != "pocket-copilot" || uri.host != "pair") return null
     val host = uri.getQueryParameter("host") ?: return null
     val port = uri.getQueryParameter("port")?.toIntOrNull() ?: 8765
     val device = uri.getQueryParameter("device") ?: return null

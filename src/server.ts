@@ -1,5 +1,5 @@
 // ============================================================================
-// = copilot-bridge daemon 入口                                                 =
+// = pocket-copilot daemon 入口                                                 =
 // 职责：                                                                          =
 //   1. 连接 agent host（AHP），镜像焦点会话状态（AhpConnection + AhpMirror）     =
 //   2. 暴露简化手机协议（WS /ws），鉴权 + 视图快照节流推送（PhoneHub）           =
@@ -224,9 +224,9 @@ async function serveStatic(
 // ---------------------------------------------------------------------------
 
 server.listen(PORT, HOST, () => {
-  console.log(`[bridge] daemon 已启动：http://${HOST}:${PORT}`);
-  console.log(`[bridge] 手机 WS：ws://${HOST}:${PORT}/ws`);
-  console.log(`[bridge] agent host 端口：${AGENT_HOST_PORT}`);
+  console.log(`[pocket] daemon 已启动：http://${HOST}:${PORT}`);
+  console.log(`[pocket] 手机 WS：ws://${HOST}:${PORT}/ws`);
+  console.log(`[pocket] agent host 端口：${AGENT_HOST_PORT}`);
   hub.start();
   connection.start();
 });

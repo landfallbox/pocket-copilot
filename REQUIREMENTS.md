@@ -1,10 +1,10 @@
-# 项目文档：copilot-bridge
+# 项目文档：pocket-copilot
 
 > 一份文档，先明确"做什么"（Part 1），再逐步细化"怎么做"（Part 2）。
 > 新会话开始任何工作前，先完整阅读本文件以恢复全部上下文，然后从"下一步"继续。
 > 2026-08-27 由 REQUIREMENTS.md（需求封板）与 CONTEXT.md（技术事实）合并而成。
 > **2026-09-23 架构大改**：AHP（Agent Host Protocol）端到端 Spike 通过，读/写路径全部改用 AHP 官方协议；原 heimdall 记录 + 对齐器读路径与 UIA 写路径退役（详见 §12）。
-> **2026-09-23 端形态定稿**：最终手机端为 **Android 原生 App**（Kotlin + Compose），电脑端 bridge 演进为 **daemon**（AHP 客户端 + 简化手机协议网关 + 配对）；AHP 留在电脑端，Android 为瘦客户端（详见 §5/§6/§9）。PWA 降级为过渡期开发工具（仍直连 agent host）。
+> **2026-09-23 端形态定稿**：最终手机端为 **Android 原生 App**（Kotlin + Compose），电脑端 pocket-copilot 演进为 **daemon**（AHP 客户端 + 简化手机协议网关 + 配对）；AHP 留在电脑端，Android 为瘦客户端（详见 §5/§6/§9）。PWA 降级为过渡期开发工具（仍直连 agent host）。
 
 ---
 
@@ -76,12 +76,12 @@
 | M2 消息格式 | 纯文本 |
 | diff 体验 | 最终完整实现，先做基础版（有待审编辑 + diff 内容展示） |
 | 写路径具体机制 | **AHP dispatchAction**（2026-09-23 Spike 3 实测定稿：外部客户端向 chat 通道发 `chat/pendingMessageSet`，Copilot turn 真实执行，与 Agents 窗口同一代码路径）；UIA/CDP 方案退役（见 §12） |
-| **端形态（2026-09-23 定稿）** | 最终手机端 = **Android 原生 App**（Kotlin + Jetpack Compose，瘦客户端）；电脑端 = **daemon**（bridge 演进）；PWA 降级为过渡期开发工具（仍直连 agent host，用于绕过 daemon 调试） |
+| **端形态（2026-09-23 定稿）** | 最终手机端 = **Android 原生 App**（Kotlin + Jetpack Compose，瘦客户端）；电脑端 = **daemon**（pocket-copilot 演进）；PWA 降级为过渡期开发工具（仍直连 agent host，用于绕过 daemon 调试） |
 | **AHP 客户端位置** | **电脑端 daemon**（Node + 官方 `@microsoft/agent-host-protocol` TS 包，已验证）；Android 不实现 AHP（Kotlin 重写 = 重复劳动，且原始 token 会暴露到手机） |
 | **daemon 角色** | ① AHP 客户端：订阅根通道（会话列表）+ 焦点会话的 session/chat 通道，官方 `chatReducer` 维护 ChatState；② 简化手机协议网关（JSON over WS，推视图快照）；③ QR 配对（按设备发 deviceToken，原始 AHP token 不出电脑）；④ 健康探测 + VS Code 重启后自动重连 |
 | **手机协议粒度** | 快照制：daemon 维护完整 ChatState，状态变化节流 100ms 推**视图快照**（带单调版本号，手机忽略过期版本）；手机零 diff 逻辑 |
 | **镜像范围** | 只镜像"焦点会话"（手机正在看的那个 session + chat 通道）；手机切会话时 daemon 切订阅；不镜像全部会话 |
-| 配对方式 | QR 码：`copilot-bridge://pair?host=<Tailscale-IP>&port=8765&device=<deviceToken>`；Android deep link 解析后连 `ws://<host>:8765/ws` 发 `hello` 鉴权 |
+| 配对方式 | QR 码：`pocket-copilot://pair?host=<Tailscale-IP>&port=8765&device=<deviceToken>`；Android deep link 解析后连 `ws://<host>:8765/ws` 发 `hello` 鉴权 |
 | PWA 过渡策略 | 保留直连 agent host 不动（开发/调试用）；不切到 daemon（用户 2026-09-23 决定跳过该过渡步骤，daemon 用 WS 脚本验证后直接进 Android） |
 | 前端技术栈（PWA，过渡期） | React 19 + Vite + TS + zustand（沿用 demo 已验证底座）；**移除 @assistant-ui/react**，展示层手写组件 |
 | Android 技术栈 | Kotlin + Jetpack Compose；WebSocket 用 OkHttp；QR 扫码用 ML Kit（deep link 兜底手动输入） |
@@ -201,17 +201,17 @@ jsonl 记录结构（抽样验证）：
 
 > 原数据面（heimdall 记录 + jsonl 索引 + 对齐器）于 **2026-09-23 整体退役**，由 AHP 原生状态取代（见 §6/§7.6）：AHP 天然提供流式内容、会话归属、历史分页（`fetchTurns`），"会话归属对齐"承重墙风险随之消失。以下为历史结论摘要。
 
-- **heimdall 请求/响应记录**（worktree `feature/request-logging` 开发完成）：逐 chunk 实时 append（request_start/chunk/request_end），配置开关默认关。离线（2026-08-27）+ 在线（2026-08-28）验证均通过：对齐三层（主键 `<userRequest>` 提取 / 历史指纹消歧 / token 时序配对校验）在真实流量成立，全链路（router 落盘 → bridge 读取 → 对齐 → 浏览器渲染）打通。主路径改用 AHP 后不再使用；heimdall 仓库不动（功能在默认关的开关后，生产路由无影响）
-- **copilot-bridge 侧旧数据面代码**（heimdall-tailer / registry / tailer / line-tailer / session-info / session-titles / model-name / project-name，约 2000 行）随 M1 重构删除
+- **heimdall 请求/响应记录**（worktree `feature/request-logging` 开发完成）：逐 chunk 实时 append（request_start/chunk/request_end），配置开关默认关。离线（2026-08-27）+ 在线（2026-08-28）验证均通过：对齐三层（主键 `<userRequest>` 提取 / 历史指纹消歧 / token 时序配对校验）在真实流量成立，全链路（router 落盘 → pocket-copilot 读取 → 对齐 → 浏览器渲染）打通。主路径改用 AHP 后不再使用；heimdall 仓库不动（功能在默认关的开关后，生产路由无影响）
+- **pocket-copilot 侧旧数据面代码**（heimdall-tailer / registry / tailer / line-tailer / session-info / session-titles / model-name / project-name，约 2000 行）随 M1 重构删除
 - **UIA 写路径**（Spike 2，`inject.ts` 386 行）同样退役删除；其前提 `accessibilitySupport: "on"` 已写入用户 settings.json，可保留（无害）或还原
 
-## 9. daemon 架构（Node，bridge 演进）
+## 9. daemon 架构（Node，pocket-copilot 演进）
 
 - 技术栈：TypeScript + ESM（`tsx` 直跑，无构建），**不引入框架**。服务 bind 0.0.0.0:8765（Tailscale 访问），`npm run dev` 启动；`launch-vscode-ahp.cmd` 顺带拉起
 - 职责：
   - **AHP 客户端**（`src/ahp/`）：官方 `@microsoft/agent-host-protocol` TS 包；连接/initialize/断线重连（watch token.txt + 健康探测 8081）；订阅根通道（会话列表）+ 焦点会话的 session/chat 通道；官方 `chatReducer` 维护 ChatState
   - **简化手机协议网关**（`src/phone/`）：JSON over WS（`/ws` 路径 upgrade）；设备鉴权（deviceToken）；会话列表 / 视图快照（节流 100ms + 单调版本号）/ host 状态 事件扇出；命令（select/send，M5 加 stop/respond）
-  - **配对**（`src/phone/pairing.ts`）：deviceToken 生成/校验（存 `%USERPROFILE%\.copilot-bridge\devices.json`）；QR 内容 `copilot-bridge://pair?host=<Tailscale-IP>&port=8765&device=<deviceToken>`
+  - **配对**（`src/phone/pairing.ts`）：deviceToken 生成/校验（存 `%USERPROFILE%\.pocket-copilot\devices.json`）；QR 内容 `pocket-copilot://pair?host=<Tailscale-IP>&port=8765&device=<deviceToken>`
   - **静态托管 + 配置端点 + 健康检查**（既有，保留）：PWA 过渡期仍用
 - 模块拆分：
   - `src/ahp/connection.ts`：AHP 连接生命周期（store.ts 连接状态机移植）
@@ -277,7 +277,7 @@ jsonl 记录结构（抽样验证）：
 |---|---|---|---|
 | 1（先做，低风险） | 文件监听 → 事件流 → 最简网页实时显示当前会话 | 浏览器上看到真实 Copilot 会话随 PC 侧操作更新 | **基础设施已跑通**（tailer/WS/前端）；"内容显示"目标由 1.5 系列接管（内容源改为 heimdall） |
 | **1.5a（关键风险验证，最高优先级）** | **对齐可行性最小实验**：抓 1-2 个真实 heimdall 请求体（临时开启请求体日志或代理抓包），对比 jsonl userText，验证"最后一条用户消息匹配"在真实数据上成立（含并行会话、@上下文包裹情况）；顺带摸清 heimdall 实际收到的流量构成（非聊天流量占比），确定过滤规则 | 真实数据上主键匹配成功率可接受，消歧/归一化规则明确，过滤规则明确 | **✅ 2026-08-27 离线验证通过**（用 debug-logs 替代 heimdall 请求体 + usage jsonl 替代 request_end；主键/消歧/token 三层均成立，见 §8 历史摘要；非聊天流量过滤规则与 @文件富内容待 1.5 在线补验） |
-| 1.5（读路径重构，2026-08-27 立项） | heimdall 加请求/响应记录（worktree 分支开发）；bridge 读路径改为 heimdall 记录 + jsonl 索引混合 | 流式文本/思考/工具从 heimdall 记录可靠还原，会话归属按对齐策略（§8 历史摘要）成功 | **✅ 2026-08-28 在线验证通过**（开发版 router 4100 + Qwen 3.8 27B DEV 真实流量：router 落盘 → bridge 读取 → aligner 对齐 → 浏览器渲染助手正文全链路打通）。在线验证暴露并修复 3 个 bug：① lastUserText 是完整 prompt 非纯输入（须提取 `<userRequest>`）；② 取最后一个 `<userRequest>` 块（context 可能回显含该标签字面量的历史命令）；③ chunk 丢失竞态（重启重放 heimdall 先于 jsonl，须缓冲 chunk + pending 重试）。**残留**：@文件富内容/并行碰撞样本/非聊天流量过滤（不阻塞） |
+| 1.5（读路径重构，2026-08-27 立项） | heimdall 加请求/响应记录（worktree 分支开发）；pocket-copilot 读路径改为 heimdall 记录 + jsonl 索引混合 | 流式文本/思考/工具从 heimdall 记录可靠还原，会话归属按对齐策略（§8 历史摘要）成功 | **✅ 2026-08-28 在线验证通过**（开发版 router 4100 + Qwen 3.8 27B DEV 真实流量：router 落盘 → pocket-copilot 读取 → aligner 对齐 → 浏览器渲染助手正文全链路打通）。在线验证暴露并修复 3 个 bug：① lastUserText 是完整 prompt 非纯输入（须提取 `<userRequest>`）；② 取最后一个 `<userRequest>` 块（context 可能回显含该标签字面量的历史命令）；③ chunk 丢失竞态（重启重放 heimdall 先于 jsonl，须缓冲 chunk + pending 重试）。**残留**：@文件富内容/并行碰撞样本/非聊天流量过滤（不阻塞） |
 | 2 | 写路径验证（机制 2026-08-31 由 CDP 改为 **Windows UIA**）：不重启 VS Code/不开调试端口，PowerShell + .NET UIAutomation 定位会话（Pick Agent Session 选择器）+ 输入框，剪贴板粘贴注入一条消息 | 消息出现在 PC 的 Copilot 会话中，回复两端都可见 | **✅ 2026-08-31 实测通过**（注入 + 会话定位全链路验证，结论见 8 历史摘要；CDP 方案因需 `--remote-debugging-port` 启动参数被用户否决后弃用；方案 2026-09-23 被 AHP 取代） |
 | **3（AHP 端到端，2026-09-23）** | 外部客户端（Node + 官方 `@microsoft/agent-host-protocol`）经 WebSocket + token 连接 agent host → `initialize` → `createSession` → 向 chat 通道 dispatch `chat/pendingMessageSet` → 观察 turn 事件 | Copilot turn 真实执行（worktree 创建、流式输出、token 统计、`turnComplete`），回复内容与指令一致 | **✅ 2026-09-23 实测通过**（VS Code 1.136.2 + 真实 Copilot 账号，闭环 8 秒，结论见 6；关键陷阱：消息必须发 chat 通道，session 通道不消费） |
 
@@ -289,7 +289,7 @@ Spike 链：**1.5a → 1.5 → 2（已完成，方案退役）→ 3（AHP 端到
 2. ~~Spike 2（UIA 写路径）~~（实测通过，方案 2026-09-23 退役）
 3. ~~Spike 3（AHP 端到端）~~（2026-09-23 实测通过，AHP 主路径定稿，见 6/7.6）
 4. **M1 读全通（AHP）**：
-   - 启动器加固：`launch-vscode-ahp.cmd` 首次运行自动生成 token 并持久化到 `%USERPROFILE%\.copilot-bridge\`（token 不硬编码进仓库）；桌面快捷方式目标改为启动器
+   - 启动器加固：`launch-vscode-ahp.cmd` 首次运行自动生成 token 并持久化到 `%USERPROFILE%\.pocket-copilot\`（token 不硬编码进仓库）；桌面快捷方式目标改为启动器
    - web/：引入 `@microsoft/agent-host-protocol`，store.ts 重构（AhpStateMirror + zustand），convert.ts 重写（AHP 状态 → 视图模型）；展示层组件复用
    - src/：瘦身为薄服务（静态托管 + 配置端点 + agent host 端口健康检查）；删除旧数据面代码（约 2000 行，见 §8）
    - 验收：手机（Tailscale）打开 `http://<PC的tailscale-ip>:8765` → 会话总览 → 完整历史 → PC 侧真实会话实时流式

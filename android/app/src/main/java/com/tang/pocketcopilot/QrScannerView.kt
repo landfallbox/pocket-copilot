@@ -1,4 +1,4 @@
-package com.tang.copilotbridge
+package com.tang.pocketcopilot
 
 import android.content.Context
 import androidx.camera.core.CameraSelector

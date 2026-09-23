@@ -1,4 +1,4 @@
-package com.tang.copilotbridge
+package com.tang.pocketcopilot
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject

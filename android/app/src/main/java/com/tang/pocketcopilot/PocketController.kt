@@ -1,4 +1,4 @@
-package com.tang.copilotbridge
+package com.tang.pocketcopilot
 
 import android.content.Context
 import android.net.Uri
@@ -15,10 +15,10 @@ import kotlinx.coroutines.launch
 
 /**
  * 进程级连接控制器（单例）。
- * 持有 [BridgeClient] 与全部 UI 状态，生命周期跟随进程而非 Activity：
+ * 持有 [PocketClient] 与全部 UI 状态，生命周期跟随进程而非 Activity：
  * 前台 Service 负责拉起/停止它，Activity 被杀后连接与状态依然保留。
  */
-class BridgeController private constructor(private val app: Context) {
+class PocketController private constructor(private val app: Context) {
 
     val configStore = ConfigStore(app)
 
@@ -27,8 +27,8 @@ class BridgeController private constructor(private val app: Context) {
     private val _config = MutableStateFlow<ConnConfig?>(null)
     val config: StateFlow<ConnConfig?> = _config.asStateFlow()
 
-    private val _clientState = MutableStateFlow(BridgeClient.ClientState.DISCONNECTED)
-    val clientState: StateFlow<BridgeClient.ClientState> = _clientState.asStateFlow()
+    private val _clientState = MutableStateFlow(PocketClient.ClientState.DISCONNECTED)
+    val clientState: StateFlow<PocketClient.ClientState> = _clientState.asStateFlow()
 
     private val _sessions = MutableStateFlow<List<PhoneSession>>(emptyList())
     val sessions: StateFlow<List<PhoneSession>> = _sessions.asStateFlow()
@@ -42,7 +42,7 @@ class BridgeController private constructor(private val app: Context) {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    private var client: BridgeClient? = null
+    private var client: PocketClient? = null
 
     /**
      * 进程/Service 启动后调用：加载已保存配置，有则自动连接。
@@ -63,7 +63,7 @@ class BridgeController private constructor(private val app: Context) {
             if (c == null) {
                 client?.stop()
                 client = null
-                _clientState.value = BridgeClient.ClientState.DISCONNECTED
+                _clientState.value = PocketClient.ClientState.DISCONNECTED
                 _sessions.value = emptyList()
                 _focus.value = null
                 _view.value = null
@@ -89,9 +89,9 @@ class BridgeController private constructor(private val app: Context) {
         _error.value = null
     }
 
-    /** 深链 copilot-bridge://pair?host=..&port=..&device=.. → 保存并连接 */
+    /** 深链 pocket-copilot://pair?host=..&port=..&device=.. → 保存并连接 */
     fun onDeepLink(uri: Uri) {
-        if (uri.scheme != "copilot-bridge" || uri.host != "pair") return
+        if (uri.scheme != "pocket-copilot" || uri.host != "pair") return
         val host = uri.getQueryParameter("host") ?: return
         val port = uri.getQueryParameter("port")?.toIntOrNull() ?: 8765
         val device = uri.getQueryParameter("device") ?: return
@@ -100,7 +100,7 @@ class BridgeController private constructor(private val app: Context) {
 
     private fun startClient(c: ConnConfig) {
         client?.stop()
-        client = BridgeClient(
+        client = PocketClient(
             config = c,
             onEvent = ::handleEvent,
             onState = { _clientState.value = it },
@@ -127,11 +127,11 @@ class BridgeController private constructor(private val app: Context) {
 
     companion object {
         @Volatile
-        private var instance: BridgeController? = null
+        private var instance: PocketController? = null
 
-        fun get(app: Context): BridgeController =
+        fun get(app: Context): PocketController =
             instance ?: synchronized(this) {
-                instance ?: BridgeController(app.applicationContext).also { instance = it }
+                instance ?: PocketController(app.applicationContext).also { instance = it }
             }
     }
 }

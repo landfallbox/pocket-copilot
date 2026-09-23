@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     port: 5173,
-    // 同源代理到 bridge（/api/theme 等）；WS 直连 8765 见 store.ts
+    // 同源代理到 pocket-copilot（/api/theme 等）；WS 直连 8765 见 store.ts
     proxy: {
       '/api': { target: 'http://127.0.0.1:8765', changeOrigin: true },
     },

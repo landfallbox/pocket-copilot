@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.tang.copilotbridge"
+    namespace = "com.tang.pocketcopilot"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.tang.copilotbridge"
+        applicationId = "com.tang.pocketcopilot"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
