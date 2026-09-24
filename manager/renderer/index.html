@@ -6,69 +6,273 @@
 <title>pocket-copilot 管理器</title>
 <style>
   :root {
-    --bg: #111318; --card: #1a1d24; --border: #2a2e38; --text: #d6dae3;
-    --muted: #8b93a3; --accent: #4c8dff; --green: #54b054; --yellow: #e6b43c; --red: #dc5046;
+    --bg: #0b0d12;
+    --card: #141821; --card-hi: #181d29;
+    --border: #242b3a; --border-soft: rgba(255, 255, 255, .05);
+    --text: #e7eaf2; --muted: #8b94a7;
+    --accent: #4c8dff; --accent-2: #6ba1ff;
+    --green: #3fd07f; --yellow: #f2b63c; --red: #f26055;
+    --input: #0d1017; --btn: #1c2230; --btn-hover: #252d3f;
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: #4a4a4a transparent; }
+  *::-webkit-scrollbar { width: 10px; height: 8px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-corner { background: transparent; }
+  *::-webkit-scrollbar-thumb {
+    background: #4a4a4a; border-radius: 6px;
+    border: 2px solid transparent; background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover { background: #5a5a5a; background-clip: content-box; }
   body {
-    margin: 0; padding: 16px 20px; background: var(--bg); color: var(--text);
+    margin: 0; padding: 20px 24px 28px; color: var(--text);
     font: 14px/1.55 "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    background-image:
+      radial-gradient(900px 420px at 12% -10%, rgba(76, 141, 255, .10), transparent 60%),
+      radial-gradient(700px 380px at 95% -5%, rgba(63, 208, 127, .06), transparent 55%);
+    background-repeat: no-repeat;
   }
-  h1 { font-size: 17px; margin: 0 0 14px; font-weight: 600; }
-  h1 .sub { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 10px; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  h1 { font-size: 18px; font-weight: 700; letter-spacing: .2px; margin: 0; }
+  .sub {
+    color: var(--muted); font-size: 11px;
+    padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px;
+    background: rgba(255, 255, 255, .03);
+  }
+  .overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .tile {
+    display: flex; align-items: center; gap: 10px;
+    background: linear-gradient(180deg, var(--card-hi), var(--card));
+    border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03);
+  }
+  .t-name { font-size: 11px; color: var(--muted); letter-spacing: .4px; }
+  .t-val { font-size: 13px; font-weight: 600; margin-top: 1px; }
+  .t-val.ok { color: var(--green); }
+  .t-val.warn { color: var(--yellow); }
+  .t-val.off { color: var(--red); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   .card {
-    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
-    padding: 14px 16px;
+    background: linear-gradient(180deg, var(--card-hi), var(--card));
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 18px 20px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .30), inset 0 1px 0 rgba(255, 255, 255, .03);
+    transition: border-color .2s;
   }
-  .card h2 { font-size: 14px; margin: 0 0 10px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .card:hover { border-color: #323c52; }
+  .card h2 {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 14px; font-weight: 600; margin: 0 0 14px; padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-soft);
+  }
   .full { grid-column: 1 / -1; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: var(--muted); flex: none; }
-  .dot.on { background: var(--green); }
-  .dot.warn { background: var(--yellow); }
-  .dot.off { background: var(--red); }
-  label { display: block; color: var(--muted); font-size: 12px; margin: 8px 0 3px; }
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%; flex: none;
+    background: var(--muted); box-shadow: 0 0 0 3px rgba(139, 148, 167, .15);
+  }
+  .dot.on { background: var(--green); box-shadow: 0 0 0 3px rgba(63, 208, 127, .15), 0 0 10px rgba(63, 208, 127, .55); animation: pulse 2.4s ease-in-out infinite; }
+  .dot.warn { background: var(--yellow); box-shadow: 0 0 0 3px rgba(242, 182, 60, .15), 0 0 10px rgba(242, 182, 60, .45); }
+  .dot.off { background: var(--red); box-shadow: 0 0 0 3px rgba(242, 96, 85, .15); }
+  @keyframes pulse { 50% { opacity: .55; } }
+  label { display: block; color: var(--muted); font-size: 11px; letter-spacing: .4px; margin: 12px 0 5px; }
   input[type=text] {
-    width: 100%; background: #0d0f13; border: 1px solid var(--border); color: var(--text);
-    border-radius: 6px; padding: 6px 9px; font: 13px Consolas, monospace;
+    width: 100%; background: var(--input); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 8px 11px; font: 13px Consolas, monospace;
+    transition: border-color .15s, box-shadow .15s;
   }
-  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  input[type=text]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(76, 141, 255, .16); }
+  input[type=checkbox] { accent-color: var(--accent); }
   button {
-    background: #232836; color: var(--text); border: 1px solid var(--border); border-radius: 6px;
-    padding: 6px 14px; cursor: pointer; font-size: 13px;
+    background: var(--btn); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 16px; cursor: pointer; font-size: 13px; font-weight: 500;
+    transition: background .15s, border-color .15s, transform .1s, filter .15s;
   }
-  button:hover { border-color: var(--accent); }
+  button:hover:not(:disabled) { background: var(--btn-hover); border-color: var(--accent); }
+  button:active:not(:disabled) { transform: translateY(1px); }
   button:disabled { opacity: .45; cursor: default; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button.danger { background: transparent; border-color: var(--red); color: var(--red); }
-  .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
-  .kv { display: flex; justify-content: space-between; padding: 3px 0; font-size: 13px; }
-  .kv .k { color: var(--muted); }
+  button.primary {
+    background: linear-gradient(180deg, var(--accent-2), var(--accent));
+    border-color: transparent; color: #fff;
+    box-shadow: 0 2px 10px rgba(76, 141, 255, .35);
+  }
+  button.primary:hover:not(:disabled) { filter: brightness(1.1); border-color: transparent; }
+  button.danger { background: transparent; border-color: rgba(242, 96, 85, .5); color: var(--red); }
+  button.danger:hover:not(:disabled) { background: rgba(242, 96, 85, .10); border-color: var(--red); }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+  .kv { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; font-size: 13px; }
+  .kv + .kv { border-top: 1px solid var(--border-soft); }
+  .kv .k { color: var(--muted); font-size: 12.5px; }
+  .kv .v {
+    font-size: 12.5px; padding: 2px 10px; border-radius: 999px;
+    background: rgba(255, 255, 255, .045); border: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+  .kv .v[data-tone="ok"] { color: var(--green); background: rgba(63, 208, 127, .10); border-color: rgba(63, 208, 127, .30); }
+  .kv .v[data-tone="warn"] { color: var(--yellow); background: rgba(242, 182, 60, .10); border-color: rgba(242, 182, 60, .30); }
+  .kv .v[data-tone="off"] { color: var(--red); background: rgba(242, 96, 85, .10); border-color: rgba(242, 96, 85, .30); }
+  .kv .v.mono { background: none; border: none; padding: 0; font: 12px Consolas, monospace; color: var(--muted); }
   .banner {
-    display: none; margin-top: 10px; padding: 8px 12px; border-radius: 6px; font-size: 13px;
-    background: rgba(230, 180, 60, .12); border: 1px solid var(--yellow);
+    display: none; margin-top: 14px; padding: 10px 14px; border-radius: 10px; font-size: 13px;
+    background: rgba(242, 182, 60, .08); border: 1px solid rgba(242, 182, 60, .40);
   }
   .banner.show { display: flex; gap: 10px; align-items: center; }
   .banner .msg { flex: 1; }
   .link { color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: none; padding: 0; font-size: 13px; }
   .muted { color: var(--muted); font-size: 12px; }
+  .duo-title { font-size: 11px; color: var(--muted); letter-spacing: .4px; margin-bottom: 8px; }
+  .phone-chip {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 14px; border: 1px solid var(--border); border-radius: 10px;
+    background: rgba(255, 255, 255, .02); font-size: 13px;
+  }
+  .phone-chip + .phone-chip { margin-top: 8px; }
+  .phone-chip .p-name { font-weight: 600; }
+  .phone-chip .p-meta { color: var(--muted); font-size: 12px; }
+  .phone-chip .p-alive { margin-left: auto; font-size: 12px; }
+  .p-alive.ok { color: var(--green); }
+  .p-alive.bad { color: var(--yellow); }
+  .sessions-scroll { max-height: 320px; overflow-y: auto; }
+  .sessions-scroll thead th {
+    position: sticky; top: 0; background: var(--card);
+    box-shadow: 0 1px 0 var(--border);
+  }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 500; font-size: 12px; }
-  .empty { color: var(--muted); font-size: 12px; padding: 6px 0; }
-  .token-row { display: flex; gap: 6px; }
+  th, td { text-align: left; padding: 7px 10px 7px 0; border-bottom: 1px solid var(--border-soft); }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: .4px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: rgba(255, 255, 255, .02); }
+  .empty {
+    color: var(--muted); font-size: 12.5px; padding: 12px; text-align: center;
+    background: rgba(255, 255, 255, .02); border: 1px dashed var(--border); border-radius: 8px;
+  }
+  .token-row { display: flex; gap: 8px; }
   .token-row input { flex: 1; }
   #toast {
-    position: fixed; right: 16px; bottom: 16px; background: #232836; border: 1px solid var(--border);
-    border-radius: 8px; padding: 8px 14px; font-size: 13px; display: none;
+    position: fixed; right: 18px; bottom: 18px; z-index: 10;
+    background: var(--btn); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 16px; font-size: 13px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
+    opacity: 0; transform: translateY(8px); pointer-events: none;
+    transition: opacity .2s, transform .2s;
+  }
+  #toast.show { opacity: 1; transform: translateY(0); }
+  .settings-list { display: flex; flex-direction: column; }
+  .setting-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 2px;
+  }
+  .setting-row + .setting-row { border-top: 1px solid var(--border-soft); }
+  .setting-row .s-text { flex: 1; }
+  .setting-row .s-title { font-size: 13.5px; font-weight: 500; }
+  .setting-row .s-desc { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .track {
+    position: absolute; inset: 0; cursor: pointer; border-radius: 999px;
+    background: #2a3140; border: 1px solid var(--border);
+    transition: background .2s, border-color .2s;
+  }
+  .switch .track::before {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #8b94a7; transition: transform .2s, background .2s;
+  }
+  .switch input:checked + .track { background: var(--accent); border-color: var(--accent); }
+  .switch input:checked + .track::before { transform: translateX(18px); background: #fff; }
+  .switch input:focus-visible + .track { box-shadow: 0 0 0 3px rgba(76, 141, 255, .25); }
+  .tabs {
+    display: flex; gap: 6px; margin: 0 -24px 16px; padding: 10px 24px;
+    position: sticky; top: 0; z-index: 5;
+    background: rgba(11, 13, 18, .82);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .tab {
+    background: transparent; border: 1px solid transparent; border-radius: 8px;
+    padding: 6px 18px; color: var(--muted); font-size: 13px; font-weight: 500;
+  }
+  .tab:hover { color: var(--text); background: rgba(255, 255, 255, .04); }
+  .tab.active {
+    color: var(--text); background: var(--btn); border-color: var(--border);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
+  }
+  .page[hidden] { display: none; }
+  @media (max-width: 820px) {
+    .grid { grid-template-columns: 1fr; }
+    .overview { grid-template-columns: 1fr 1fr; }
   }
 </style>
 </head>
 <body>
-  <h1>pocket-copilot 管理器 <span class="sub" id="updatedAt"></span></h1>
+  <div class="header">
+    <h1>pocket-copilot 管理器</h1>
+    <span class="sub" id="updatedAt">未更新</span>
+  </div>
+
+  <div class="overview">
+    <div class="tile"><span class="dot" id="vsDot"></span><div><div class="t-name">VS Code</div><div class="t-val" id="tileVs">检测中…</div></div></div>
+    <div class="tile"><span class="dot" id="daemonDot"></span><div><div class="t-name">Daemon</div><div class="t-val" id="tileDaemon">检测中…</div></div></div>
+    <div class="tile"><span class="dot" id="tunnelDot"></span><div><div class="t-name">公网隧道</div><div class="t-val" id="tileTunnel">检测中…</div></div></div>
+    <div class="tile"><span class="dot" id="phoneDot"></span><div><div class="t-name">手机</div><div class="t-val" id="tilePhone">检测中…</div></div></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="status">状态</button>
+    <button class="tab" data-tab="settings">设置</button>
+  </div>
+
+  <div class="page" id="page-status">
   <div class="grid">
 
     <div class="card">
+      <h2>VS Code（agent host）</h2>
+      <div class="kv"><span class="k">进程状态</span><span class="v" id="vsState">检测中…</span></div>
+      <div class="kv"><span class="k">AHP 端口</span><span class="v" id="ahpPort">-</span></div>
+      <div class="kv"><span class="k">daemon 已连上 AHP</span><span class="v" id="ahpConnected">-</span></div>
+      <div class="row">
+        <button id="btnVsRestart">重启 VS Code</button>
+        <span class="muted">将结束所有 VS Code 进程（含其中的终端与 agent 会话）后重新打开本工作区</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Daemon（端口 8765）</h2>
+      <div class="kv"><span class="k">状态</span><span class="v" id="daemonState">检测中…</span></div>
+      <div class="kv"><span class="k">PID / 运行时长</span><span class="v" id="daemonPid">-</span></div>
+      <div class="row">
+        <button class="primary" id="btnDaemonStart">启动</button>
+        <button class="danger" id="btnDaemonStop">停止</button>
+        <button id="btnDaemonLog">查看日志</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>公网隧道（28765 → 8765）</h2>
+      <div class="kv"><span class="k">隧道状态</span><span class="v" id="tunnelState">检测中…</span></div>
+      <div class="kv"><span class="k">公网探活</span><span class="v" id="publicState">检测中…</span></div>
+      <div class="kv"><span class="k">公网地址</span><span class="v mono" id="publicUrl">-</span></div>
+      <div class="row">
+        <button class="primary" id="btnTunnelStart">启动</button>
+        <button class="danger" id="btnTunnelStop">停止</button>
+        <button id="btnTunnelLog">查看日志</button>
+      </div>
+    </div>
+
+    <div class="card full">
+      <h2>手机与会话</h2>
+      <div class="duo-title">手机</div>
+      <div id="phonesArea" class="empty">暂无手机连接</div>
+      <div class="duo-title" style="margin-top:14px">会话</div>
+      <div id="sessionsArea" class="empty">暂无会话（AHP 未连接时为空）</div>
+    </div>
+
+  </div>
+  </div>
+
+  <div class="page" id="page-settings" hidden>
+  <div class="grid">
+
+    <div class="card full">
       <h2><span class="dot" id="envDot"></span>AHP 环境变量（VS Code）</h2>
       <label>VSCODE_AGENT_HOST_PORT</label>
       <input type="text" id="envPort" spellcheck="false" />
@@ -90,49 +294,34 @@
       </div>
     </div>
 
-    <div class="card">
-      <h2><span class="dot" id="vsDot"></span>VS Code（agent host）</h2>
-      <div class="kv"><span class="k">进程状态</span><span id="vsState">检测中…</span></div>
-      <div class="kv"><span class="k">AHP 端口</span><span id="ahpPort">-</span></div>
-      <div class="kv"><span class="k">daemon 已连上 AHP</span><span id="ahpConnected">-</span></div>
-      <div class="row">
-        <button id="btnVsRestart">重启 VS Code</button>
-        <span class="muted">将结束所有 VS Code 进程（含其中的终端与 agent 会话）后重新打开本工作区</span>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2><span class="dot" id="daemonDot"></span>Daemon（端口 8765）</h2>
-      <div class="kv"><span class="k">状态</span><span id="daemonState">检测中…</span></div>
-      <div class="kv"><span class="k">PID / 运行时长</span><span id="daemonPid">-</span></div>
-      <div class="kv"><span class="k">开机自启</span>
-        <span><label style="display:inline;margin:0"><input type="checkbox" id="chkAutoStart" /> 登录时自动启动</label></span>
-      </div>
-      <div class="row">
-        <button class="primary" id="btnDaemonStart">启动</button>
-        <button class="danger" id="btnDaemonStop">停止</button>
-        <button id="btnDaemonLog">查看日志</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2><span class="dot" id="tunnelDot"></span>公网隧道（28765 → 8765）</h2>
-      <div class="kv"><span class="k">隧道状态</span><span id="tunnelState">检测中…</span></div>
-      <div class="kv"><span class="k">公网探活</span><span id="publicState">检测中…</span></div>
-      <div class="kv"><span class="k">公网地址</span><span id="publicUrl" class="muted">-</span></div>
-      <div class="row">
-        <button class="primary" id="btnTunnelStart">启动</button>
-        <button class="danger" id="btnTunnelStop">停止</button>
-        <button id="btnTunnelLog">查看日志</button>
-      </div>
-    </div>
-
     <div class="card full">
-      <h2><span class="dot" id="phoneDot"></span>手机与会话</h2>
-      <div id="phonesArea" class="empty">暂无手机连接</div>
-      <div id="sessionsArea" class="empty" style="margin-top:8px">暂无会话（AHP 未连接时为空）</div>
+      <h2>启动与自启</h2>
+      <div class="settings-list">
+        <div class="setting-row">
+          <div class="s-text">
+            <div class="s-title">管理器随电脑开机自启</div>
+            <div class="s-desc">登录 Windows 时静默启动管理器（驻留托盘，不弹窗口）</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="chkAppAutoStart" /><span class="track"></span></label>
+        </div>
+        <div class="setting-row">
+          <div class="s-text">
+            <div class="s-title">应用启动时自动开启 Daemon</div>
+            <div class="s-desc">管理器启动后自动拉起 daemon（端口 8765）</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="chkAutoDaemon" /><span class="track"></span></label>
+        </div>
+        <div class="setting-row">
+          <div class="s-text">
+            <div class="s-title">应用启动时自动开启公网隧道</div>
+            <div class="s-desc">管理器启动后自动建立公网隧道（28765 → 8765）</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="chkAutoTunnel" /><span class="track"></span></label>
+        </div>
+      </div>
     </div>
 
+  </div>
   </div>
   <div id="toast"></div>
 

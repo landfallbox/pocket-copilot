@@ -17,9 +17,9 @@ const PUBLIC_URL = `http://${PUBLIC_HOST}:${TUNNEL_PORT}`;
 const APPDATA = path.join(os.homedir(), 'AppData', 'Local', 'PocketCopilotManager');
 const DAEMON_LOG = path.join(APPDATA, 'daemon.log');
 const TUNNEL_LOG = path.join(APPDATA, 'tunnel.log');
+const SETTINGS_FILE = path.join(APPDATA, 'settings.json');
 // 系统自带 OpenSSH 客户端（Win10 1809+ 内置）；隧道 = 直接 spawn ssh.exe -R
 const SSH_BIN = 'C:\\WINDOWS\\System32\\OpenSSH\\ssh.exe';
-const TASK_NAME = 'PocketCopilotDaemon';
 // daemon 编译产物；运行时用软件自带的 Node（即管理器自身的 Electron 可执行文件，
 // 以 ELECTRON_RUN_AS_NODE 模式充当 node），不再依赖系统 node / npm / tsx。
 const DAEMON_ENTRY = path.join(__dirname, '..', 'dist', 'server.js');
@@ -195,8 +195,15 @@ function tunnelLog(msg) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+async function isPortListening(port) {
+  const r = await psExec(`Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty LocalPort`);
+  return r.ok && (r.stdout || '').trim().length > 0;
+}
+
 async function startDaemon() {
   if (state.daemon.running) return { ok: true, already: true };
+  // 端口已被占用（如开机自启任务已先拉起 daemon）则不重复启动
+  if (await isPortListening(DAEMON_PORT)) return { ok: true, already: true };
   if (!fs.existsSync(DAEMON_ENTRY)) {
     return { ok: false, error: `未找到 daemon 编译产物 ${DAEMON_ENTRY}，请先在项目根目录运行 npm run build:daemon` };
   }
@@ -314,41 +321,54 @@ async function stopTunnel() {
 }
 
 // ---------------------------------------------------------------------------
-// 开机自启（计划任务，Logon 触发）
+// 应用设置（settings.json：随应用启动自动开启 daemon / 隧道；管理器开机自启）
 // ---------------------------------------------------------------------------
 
-async function getAutoStart() {
-  const r = await psExec(`schtasks /Query /TN "${TASK_NAME}" /FO LIST 2>$null | Out-String`);
-  return r.ok && (r.stdout || '').includes(TASK_NAME);
+const defaultSettings = { autoStartDaemon: false, autoStartTunnel: false };
+
+function readSettings() {
+  try {
+    const j = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+    return { ...defaultSettings, ...j };
+  } catch {
+    return { ...defaultSettings };
+  }
 }
 
-async function setAutoStart(enabled) {
-  fs.mkdirSync(APPDATA, { recursive: true });
-  if (enabled) {
-    const root = path.join(__dirname, '..');
-    const script = path.join(APPDATA, 'start-daemon.ps1');
-    // 与 startDaemon 相同：软件自带 Node 运行时（当前 Electron 可执行文件）直启编译产物
-    const electronBin = process.execPath;
-    fs.writeFileSync(
-      script,
-      `# 由 pocket-copilot 管理器生成：登录时启动 daemon（已运行则跳过）\r\n` +
-        `$c = Get-NetTCPConnection -LocalPort ${DAEMON_PORT} -State Listen -ErrorAction SilentlyContinue\r\n` +
-        `if (-not $c) {\r\n` +
-        `  if (Test-Path '${DAEMON_ENTRY}') {\r\n` +
-        `    New-Item -ItemType Directory -Force -Path '${APPDATA}' | Out-Null\r\n` +
-        `    $env:ELECTRON_RUN_AS_NODE = '1'\r\n` +
-        `    $env:AHP_TOKEN = (Get-ItemProperty -Path 'HKCU:\\Environment' -Name VSCODE_AGENT_HOST_CONNECTION_TOKEN -ErrorAction SilentlyContinue).VSCODE_AGENT_HOST_CONNECTION_TOKEN\r\n` +
-        `    & '${electronBin}' '${DAEMON_ENTRY}' *> '${DAEMON_LOG}'\r\n` +
-        `  }\r\n` +
-        `}\r\n`,
-      'utf8',
-    );
-    const tr = `powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${script}"`;
-    const r = await psExec(`schtasks /Create /F /TN "${TASK_NAME}" /TR "${tr}" /SC ONLOGON`);
-    return { ok: r.ok, detail: (r.stdout || r.stderr || '').trim() };
+function writeSettings(patch) {
+  try {
+    const next = { ...readSettings(), ...patch };
+    fs.mkdirSync(APPDATA, { recursive: true });
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(next, null, 2), 'utf8');
+    return next;
+  } catch (e) {
+    return { error: e.message };
   }
-  const r = await psExec(`schtasks /Delete /F /TN "${TASK_NAME}" 2>$null | Out-String`);
-  return { ok: true, detail: (r.stdout || r.stderr || '').trim() };
+}
+
+/** 管理器是否随电脑开机自启（Electron 登录项，存于注册表） */
+function getAppAutoStart() {
+  try { return app.getLoginItemSettings().openAtLogin; } catch { return false; }
+}
+
+function setAppAutoStart(enabled) {
+  try {
+    // 开发态（electron .）需把应用目录作为参数传给 electron 可执行文件
+    const isDev = path.basename(process.execPath).toLowerCase() === 'electron.exe';
+    app.setLoginItemSettings({
+      openAtLogin: !!enabled,
+      args: isDev ? [__dirname] : [],
+    });
+    // setLoginItemSettings 在 Windows 上异步写注册表，立即读回会拿到旧值，直接以请求值为准
+    return { ok: true, value: !!enabled };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/** 本次启动是否由开机登录项拉起（用于静默驻留托盘） */
+function wasOpenedAtLogin() {
+  try { return app.getLoginItemSettings().wasOpenedAtLogin; } catch { return false; }
 }
 
 // ---------------------------------------------------------------------------
@@ -457,8 +477,28 @@ function registerIpc() {
   ipcMain.handle('daemon:stop', stopDaemon);
   ipcMain.handle('tunnel:start', startTunnel);
   ipcMain.handle('tunnel:stop', stopTunnel);
-  ipcMain.handle('autostart:get', getAutoStart);
-  ipcMain.handle('autostart:set', (_e, enabled) => setAutoStart(!!enabled));
+  ipcMain.handle('settings:get', () => {
+    const s = readSettings();
+    return { ...s, appAutoStart: getAppAutoStart() };
+  });
+  ipcMain.handle('settings:set', (_e, patch) => {
+    patch = patch || {};
+    let appAutoStart = getAppAutoStart();
+    if (typeof patch.appAutoStart === 'boolean') {
+      const r = setAppAutoStart(patch.appAutoStart);
+      if (!r.ok) return { ok: false, error: r.error };
+      appAutoStart = r.value;
+    }
+    const filePatch = {};
+    if (typeof patch.autoStartDaemon === 'boolean') filePatch.autoStartDaemon = patch.autoStartDaemon;
+    if (typeof patch.autoStartTunnel === 'boolean') filePatch.autoStartTunnel = patch.autoStartTunnel;
+    if (Object.keys(filePatch).length) {
+      const next = writeSettings(filePatch);
+      if (next.error) return { ok: false, error: next.error };
+    }
+    const s = readSettings();
+    return { ok: true, ...s, appAutoStart };
+  });
   ipcMain.handle('status:now', () => buildStatus());
   ipcMain.handle('open:log', (_e, which) => {
     const file = which === 'tunnel' ? TUNNEL_LOG : DAEMON_LOG;
@@ -480,7 +520,8 @@ function createWindow() {
     minWidth: 760,
     minHeight: 560,
     title: 'pocket-copilot 管理器',
-    backgroundColor: '#111318',
+    backgroundColor: '#0b0d12',
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -488,6 +529,8 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  // 开机自启时静默驻留托盘不弹窗口；手动启动则正常显示
+  win.once('ready-to-show', () => { if (!wasOpenedAtLogin()) win.show(); });
   win.on('closed', () => (win = null));
 }
 
@@ -514,6 +557,10 @@ if (!gotLock) {
     registerIpc();
     createWindow();
     createTray();
+    // 按设置自动开启 daemon / 隧道（开机自启时同样生效）
+    const s = readSettings();
+    if (s.autoStartDaemon) void startDaemon();
+    if (s.autoStartTunnel) void startTunnel();
     pollTimer = setInterval(poll, 3000);
     poll();
   });
