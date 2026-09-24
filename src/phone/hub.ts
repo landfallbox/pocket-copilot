@@ -15,6 +15,7 @@ import type {
   PhoneCommand,
   PhoneSession,
 } from './protocol.js';
+import { log } from '../log.js';
 
 const PUSH_THROTTLE_MS = 100;
 const HEARTBEAT_MS = 30_000;
@@ -25,6 +26,8 @@ interface PhoneState {
   name: string;
   isAlive: boolean;
   connectedAt: number;
+  /** 最近一次收到 pong 的时间（诊断心跳超时用） */
+  lastPongAt: number;
 }
 
 export class PhoneHub {
@@ -86,6 +89,7 @@ export class PhoneHub {
       name: '',
       isAlive: true,
       connectedAt: Date.now(),
+      lastPongAt: Date.now(),
     };
     this.pending.add(state);
     ws.on('message', (data) => {
@@ -104,6 +108,7 @@ export class PhoneHub {
     });
     ws.on('pong', () => {
       state.isAlive = true;
+      state.lastPongAt = Date.now();
     });
     // 仅当注册表仍指向本连接时才删除，防止旧连接的迟到 close 误删新连接
     const removeIfCurrent = () => {
@@ -112,7 +117,16 @@ export class PhoneHub {
         this.phones.delete(state.deviceToken);
       }
     };
-    ws.on('close', removeIfCurrent);
+    ws.on('close', (code, reason) => {
+      if (state.deviceToken) {
+        const upSec = Math.round((Date.now() - state.connectedAt) / 1000);
+        log(
+          'hub',
+          `手机连接关闭：${state.name} code=${code} reason=${reason || '（空）'} 已连接 ${upSec}s`,
+        );
+      }
+      removeIfCurrent();
+    });
     ws.on('error', removeIfCurrent);
   }
 
@@ -134,7 +148,7 @@ export class PhoneHub {
       state.deviceToken = cmd.device;
       state.name = 'phone';
       this.phones.set(state.deviceToken, state);
-      log(`手机已连接：${state.name}`);
+      log('hub', `手机已连接：${state.name}`);
       this.sendWelcome(state);
     })();
   }
@@ -222,7 +236,12 @@ export class PhoneHub {
   private heartbeat(): void {
     for (const p of this.phones.values()) {
       if (!p.isAlive) {
-        log(`手机心跳超时，断开：${p.name}`);
+        const upSec = Math.round((Date.now() - p.connectedAt) / 1000);
+        const sincePongSec = Math.round((Date.now() - p.lastPongAt) / 1000);
+        log(
+          'hub',
+          `手机心跳超时，断开：${p.name}（已连接 ${upSec}s，距上次 pong ${sincePongSec}s）`,
+        );
         p.ws.terminate();
         this.phones.delete(p.deviceToken);
         continue;
@@ -231,8 +250,4 @@ export class PhoneHub {
       p.ws.ping();
     }
   }
-}
-
-function log(msg: string): void {
-  console.log(`[hub] ${msg}`);
 }

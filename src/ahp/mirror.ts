@@ -20,6 +20,7 @@ import {
 } from '@microsoft/agent-host-protocol';
 import type { AhpClient, Subscription } from '@microsoft/agent-host-protocol/client';
 import type { PhoneSession } from '../phone/protocol.js';
+import { log } from '../log.js';
 
 export interface MirrorCallbacks {
   /** 会话列表变化 */
@@ -91,7 +92,7 @@ export class AhpMirror {
       const chatUri =
         sessionState?.defaultChat ?? sessionState?.chats[0]?.resource ?? null;
       if (!chatUri) {
-        log(`会话 ${sessionId} 无 chat 通道`);
+        log('mirror', `会话 ${sessionId} 无 chat 通道`);
         return;
       }
 
@@ -104,7 +105,7 @@ export class AhpMirror {
       if (chatSnap) void this.consumeChat(this.chatSub, chatUri);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log(`加载会话失败：${msg}`);
+      log('mirror', `加载会话失败：${msg}`);
     }
   }
 
@@ -169,7 +170,7 @@ export class AhpMirror {
       try {
         next = chatReducer(cs, ev.params.action as ChatAction);
       } catch (e) {
-        log(`chatReducer 失败，重置 chat 状态: ${e instanceof Error ? e.message : String(e)}`);
+        log('mirror', `chatReducer 失败，重置 chat 状态: ${e instanceof Error ? e.message : String(e)}`);
         this.focusChatState = null;
         continue;
       }
@@ -205,10 +206,6 @@ export class AhpMirror {
       })),
     );
   }
-}
-
-function log(msg: string): void {
-  console.log(`[mirror] ${msg}`);
 }
 
 /** SessionStatus 位集 → 主状态可读字符串（取最高优先位的语义） */
