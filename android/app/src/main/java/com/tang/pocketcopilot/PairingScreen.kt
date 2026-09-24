@@ -29,7 +29,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun PairingScreen(vm: AppViewModel) {
     var host by remember { mutableStateOf("") }
-    var port by remember { mutableStateOf("8765") }
+    var port by remember { mutableStateOf("") }
     var device by remember { mutableStateOf("") }
     var scanning by remember { mutableStateOf(false) }
 
@@ -100,8 +100,8 @@ fun PairingScreen(vm: AppViewModel) {
 
         OutlinedButton(
             onClick = {
-                val p = port.toIntOrNull() ?: 8765
-                if (host.isNotBlank() && device.isNotBlank()) {
+                val p = port.toIntOrNull()
+                if (host.isNotBlank() && p != null && device.isNotBlank()) {
                     vm.connect(ConnConfig(host.trim(), p, device.trim()))
                 }
             },
@@ -117,12 +117,12 @@ private fun Spacer24() {
     androidx.compose.foundation.layout.Spacer(Modifier.height(24.dp))
 }
 
-/** 解析 pocket-copilot://pair?host=..&port=..&device=.. */
+/** 解析 pocket-copilot://pair?host=..&port=..&device=..（port 必填，QR 生成端始终携带） */
 fun parsePairUri(raw: String): ConnConfig? {
     val uri = android.net.Uri.parse(raw)
     if (uri.scheme != "pocket-copilot" || uri.host != "pair") return null
     val host = uri.getQueryParameter("host") ?: return null
-    val port = uri.getQueryParameter("port")?.toIntOrNull() ?: 8765
+    val port = uri.getQueryParameter("port")?.toIntOrNull() ?: return null
     val device = uri.getQueryParameter("device") ?: return null
     return ConnConfig(host, port, device)
 }

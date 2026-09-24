@@ -14,7 +14,7 @@ private val Context.dataStore by preferencesDataStore(name = "pocket-copilot")
 
 data class ConnConfig(
     val host: String,
-    val port: Int = 8765,
+    val port: Int,
     val device: String,
 ) {
     val wsUrl: String get() = "ws://$host:$port/ws"
@@ -23,8 +23,9 @@ data class ConnConfig(
 class ConfigStore(private val context: Context) {
     val config: Flow<ConnConfig?> = context.dataStore.data.map { p ->
         val host = p[KEY_HOST] ?: return@map null
+        val port = p[KEY_PORT] ?: return@map null
         val device = p[KEY_DEVICE] ?: return@map null
-        ConnConfig(host, p[KEY_PORT] ?: 8765, device)
+        ConnConfig(host, port, device)
     }
 
     suspend fun save(c: ConnConfig) {

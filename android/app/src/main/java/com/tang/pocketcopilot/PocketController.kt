@@ -89,11 +89,11 @@ class PocketController private constructor(private val app: Context) {
         _error.value = null
     }
 
-    /** 深链 pocket-copilot://pair?host=..&port=..&device=.. → 保存并连接 */
+    /** 深链 pocket-copilot://pair?host=..&port=..&device=.. → 保存并连接（port 必填） */
     fun onDeepLink(uri: Uri) {
         if (uri.scheme != "pocket-copilot" || uri.host != "pair") return
         val host = uri.getQueryParameter("host") ?: return
-        val port = uri.getQueryParameter("port")?.toIntOrNull() ?: 8765
+        val port = uri.getQueryParameter("port")?.toIntOrNull() ?: return
         val device = uri.getQueryParameter("device") ?: return
         connect(ConnConfig(host, port, device))
     }

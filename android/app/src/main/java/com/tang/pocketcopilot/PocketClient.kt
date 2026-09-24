@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 手机 → daemon 的 WS 客户端。
- * - 连接 ws://host:8765/ws，首帧发 hello 鉴权
+ * - 连接 ws://host:port/ws（配对时指定），首帧发 hello 鉴权
  * - 断线指数退避重连（1s → 2s → 4s ... 上限 30s），重连后重新 hello
  * - 事件经 [events] 回调抛给 UI（主线程外，UI 侧自行切主线程）
  */
