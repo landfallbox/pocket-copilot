@@ -1,0 +1,12 @@
+{
+  "name": "pocket-copilot-manager",
+  "version": "0.1.0",
+  "description": "pocket-copilot 本地管理器：AHP 环境变量 / daemon / 隧道 的开关与监控",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}

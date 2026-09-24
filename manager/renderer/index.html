@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+<title>pocket-copilot 管理器</title>
+<style>
+  :root {
+    --bg: #111318; --card: #1a1d24; --border: #2a2e38; --text: #d6dae3;
+    --muted: #8b93a3; --accent: #4c8dff; --green: #54b054; --yellow: #e6b43c; --red: #dc5046;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px 20px; background: var(--bg); color: var(--text);
+    font: 14px/1.55 "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  h1 { font-size: 17px; margin: 0 0 14px; font-weight: 600; }
+  h1 .sub { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 10px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card h2 { font-size: 14px; margin: 0 0 10px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .full { grid-column: 1 / -1; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: var(--muted); flex: none; }
+  .dot.on { background: var(--green); }
+  .dot.warn { background: var(--yellow); }
+  .dot.off { background: var(--red); }
+  label { display: block; color: var(--muted); font-size: 12px; margin: 8px 0 3px; }
+  input[type=text] {
+    width: 100%; background: #0d0f13; border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 9px; font: 13px Consolas, monospace;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  button {
+    background: #232836; color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 14px; cursor: pointer; font-size: 13px;
+  }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { background: transparent; border-color: var(--red); color: var(--red); }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .kv { display: flex; justify-content: space-between; padding: 3px 0; font-size: 13px; }
+  .kv .k { color: var(--muted); }
+  .banner {
+    display: none; margin-top: 10px; padding: 8px 12px; border-radius: 6px; font-size: 13px;
+    background: rgba(230, 180, 60, .12); border: 1px solid var(--yellow);
+  }
+  .banner.show { display: flex; gap: 10px; align-items: center; }
+  .banner .msg { flex: 1; }
+  .link { color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: none; padding: 0; font-size: 13px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .empty { color: var(--muted); font-size: 12px; padding: 6px 0; }
+  .token-row { display: flex; gap: 6px; }
+  .token-row input { flex: 1; }
+  #toast {
+    position: fixed; right: 16px; bottom: 16px; background: #232836; border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 14px; font-size: 13px; display: none;
+  }
+</style>
+</head>
+<body>
+  <h1>pocket-copilot 管理器 <span class="sub" id="updatedAt"></span></h1>
+  <div class="grid">
+
+    <div class="card">
+      <h2><span class="dot" id="envDot"></span>AHP 环境变量（VS Code）</h2>
+      <label>VSCODE_AGENT_HOST_PORT</label>
+      <input type="text" id="envPort" spellcheck="false" />
+      <label>VSCODE_AGENT_HOST_HOST</label>
+      <input type="text" id="envHost" spellcheck="false" />
+      <label>VSCODE_AGENT_HOST_CONNECTION_TOKEN</label>
+      <div class="token-row">
+        <input type="text" id="envToken" spellcheck="false" />
+        <button id="btnGenToken" title="生成新 token">生成</button>
+      </div>
+      <div class="row">
+        <button class="primary" id="btnSaveEnv">保存</button>
+        <span class="muted">写入用户环境变量（HKCU\Environment），保存后需重启 VS Code 才生效</span>
+      </div>
+      <div class="banner" id="envBanner">
+        <span class="msg">已保存。环境变量在新启动的 VS Code 中生效，需要重启 VS Code。</span>
+        <button class="primary" id="btnRestartNow">马上重启</button>
+        <button id="btnRestartLater">稍后</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="dot" id="vsDot"></span>VS Code（agent host）</h2>
+      <div class="kv"><span class="k">进程状态</span><span id="vsState">检测中…</span></div>
+      <div class="kv"><span class="k">AHP 端口</span><span id="ahpPort">-</span></div>
+      <div class="kv"><span class="k">daemon 已连上 AHP</span><span id="ahpConnected">-</span></div>
+      <div class="row">
+        <button id="btnVsRestart">重启 VS Code</button>
+        <span class="muted">将结束所有 VS Code 进程（含其中的终端与 agent 会话）后重新打开本工作区</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="dot" id="daemonDot"></span>Daemon（端口 8765）</h2>
+      <div class="kv"><span class="k">状态</span><span id="daemonState">检测中…</span></div>
+      <div class="kv"><span class="k">PID / 运行时长</span><span id="daemonPid">-</span></div>
+      <div class="kv"><span class="k">开机自启</span>
+        <span><label style="display:inline;margin:0"><input type="checkbox" id="chkAutoStart" /> 登录时自动启动</label></span>
+      </div>
+      <div class="row">
+        <button class="primary" id="btnDaemonStart">启动</button>
+        <button class="danger" id="btnDaemonStop">停止</button>
+        <button id="btnDaemonLog">查看日志</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="dot" id="tunnelDot"></span>公网隧道（28765 → 8765）</h2>
+      <div class="kv"><span class="k">隧道状态</span><span id="tunnelState">检测中…</span></div>
+      <div class="kv"><span class="k">公网探活</span><span id="publicState">检测中…</span></div>
+      <div class="kv"><span class="k">公网地址</span><span id="publicUrl" class="muted">-</span></div>
+      <div class="row">
+        <button class="primary" id="btnTunnelStart">启动</button>
+        <button class="danger" id="btnTunnelStop">停止</button>
+        <button id="btnTunnelLog">查看日志</button>
+      </div>
+    </div>
+
+    <div class="card full">
+      <h2><span class="dot" id="phoneDot"></span>手机与会话</h2>
+      <div id="phonesArea" class="empty">暂无手机连接</div>
+      <div id="sessionsArea" class="empty" style="margin-top:8px">暂无会话（AHP 未连接时为空）</div>
+    </div>
+
+  </div>
+  <div id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
