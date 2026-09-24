@@ -24,6 +24,7 @@ import { AhpConnection } from './ahp/connection.js';
 import { AhpMirror } from './ahp/mirror.js';
 import { PhoneHub } from './phone/hub.js';
 import { registerDevice, qrPayload } from './phone/pairing.js';
+import { log } from './log.js';
 
 // ---------------------------------------------------------------------------
 // AHP 链路：mirror ⇄ hub，connection 驱动
@@ -117,11 +118,9 @@ const server = http.createServer((req, res) => {
 
   if (url === '/api/config') {
     // 兼容旧 PWA：仍返回 agent host 端口 + token
-    void (async () => {
-      const token = await readAgentHostToken();
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ agentHostPort: AGENT_HOST_PORT, token }));
-    })();
+    const token = readAgentHostToken();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ agentHostPort: AGENT_HOST_PORT, token }));
     return;
   }
 
@@ -132,7 +131,7 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, socket, head) => {
   const url = req.url ?? '';
-  console.log(`[ws] upgrade ${url} ua=${req.headers['user-agent'] ?? 'none'}`);
+  log('ws', `upgrade ${url} ua=${req.headers['user-agent'] ?? 'none'}`);
   if (url === '/ws' || url.startsWith('/ws?')) {
     wss.handleUpgrade(req, socket, head, (ws) => {
       hub.handleConnection(ws);
@@ -224,9 +223,9 @@ async function serveStatic(
 // ---------------------------------------------------------------------------
 
 server.listen(PORT, HOST, () => {
-  console.log(`[pocket] daemon 已启动：http://${HOST}:${PORT}`);
-  console.log(`[pocket] 手机 WS：ws://${HOST}:${PORT}/ws`);
-  console.log(`[pocket] agent host 端口：${AGENT_HOST_PORT}`);
+  log('pocket', `daemon 已启动：http://${HOST}:${PORT}`);
+  log('pocket', `手机 WS：ws://${HOST}:${PORT}/ws`);
+  log('pocket', `agent host 端口：${AGENT_HOST_PORT}`);
   hub.start();
   connection.start();
 });

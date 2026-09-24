@@ -1,6 +1,5 @@
 import os from 'node:os';
 import path from 'node:path';
-import fsp from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -16,27 +15,20 @@ import { fileURLToPath } from 'node:url';
 export const HOST = process.env.POCKET_HOST ?? '0.0.0.0';
 export const PORT = Number(process.env.POCKET_PORT ?? 8765);
 
-/** agent host 的 AHP WebSocket 端口（必须与 launch-vscode-ahp.cmd 一致） */
+/** agent host 的 AHP WebSocket 端口（必须与注册表 VSCODE_AGENT_HOST_PORT 一致） */
 export const AGENT_HOST_PORT = Number(process.env.AGENT_HOST_PORT ?? 8081);
-
-/**
- * token 唯一事实来源：launch-vscode-ahp.cmd 首次运行时生成并持久化到该文件，
- * 之后每次冷启动复用。pocket-copilot 只读，保证启动器与 PWA 看到的 token 一致。
- */
-export const TOKEN_FILE = path.join(os.homedir(), '.pocket-copilot', 'token.txt');
 
 /** 已配对设备 token 文件（手机配对用） */
 export const DEVICES_FILE = path.join(os.homedir(), '.pocket-copilot', 'devices.json');
 
-/** 读取 agent host 连接 token（文件不存在/为空返回 null） */
-export async function readAgentHostToken(): Promise<string | null> {
-  try {
-    const raw = await fsp.readFile(TOKEN_FILE, 'utf8');
-    const t = raw.trim();
-    return t.length > 0 ? t : null;
-  } catch {
-    return null;
-  }
+/**
+ * 读取 agent host 连接 token。
+ * 唯一事实来源是注册表 HKCU\Environment 的 VSCODE_AGENT_HOST_CONNECTION_TOKEN（VS Code 读取处）；
+ * 管理器启动本进程时将其注入 AHP_TOKEN 环境变量。
+ */
+export function readAgentHostToken(): string | null {
+  const t = (process.env.AHP_TOKEN ?? '').trim();
+  return t.length > 0 ? t : null;
 }
 
 /** 静态前端目录（web 前端构建产物，相对项目根） */

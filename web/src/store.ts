@@ -91,7 +91,7 @@ async function connect(): Promise<void> {
     if (!cfg.token) {
       set({
         phase: 'no-token',
-        error: '未找到连接 token，请先用 launch-vscode-ahp.cmd 启动 VS Code',
+        error: '未找到连接 token，请先在 Pocket Copilot 管理器中保存 AHP 环境变量并重启 daemon',
       });
       return;
     }
