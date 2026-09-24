@@ -5,6 +5,7 @@
 > 2026-08-27 由 REQUIREMENTS.md（需求封板）与 CONTEXT.md（技术事实）合并而成。
 > **2026-09-23 架构大改**：AHP（Agent Host Protocol）端到端 Spike 通过，读/写路径全部改用 AHP 官方协议；原 heimdall 记录 + 对齐器读路径与 UIA 写路径退役（详见 §12）。
 > **2026-09-23 端形态定稿**：最终手机端为 **Android 原生 App**（Kotlin + Compose），电脑端 pocket-copilot 演进为 **daemon**（AHP 客户端 + 简化手机协议网关 + 配对）；AHP 留在电脑端，Android 为瘦客户端（详见 §5/§6/§9）。PWA 降级为过渡期开发工具（仍直连 agent host）。
+> **2026-09-24 管理器接管**：新增 Electron 管理器（`manager/`）——AHP 环境变量读写（注册表 `HKCU\Environment` 为 token 唯一事实来源）、daemon/隧道生命周期、开机自启、一键重启 VS Code。daemon 改为 tsc 编译 + 软件自带 Node 运行时（`ELECTRON_RUN_AS_NODE`）独立子进程启动，token 经 `AHP_TOKEN` 环境变量注入；`launch-vscode-ahp.cmd` 与 token.txt 退役删除（详见 §5/§9）。
 
 ---
 
@@ -52,8 +53,8 @@
 |---|---|---|
 | M1 | 读全通：会话总览 + 全量历史 + 实时流 + diff 基础版（PWA 直连验证） | ✅ 完成 |
 | M2 | 写起步：发送文字消息（PWA 直连验证） | ✅ 完成 |
-| M3a | **daemon**：AHP 镜像（焦点会话 ChatState）+ 简化手机协议网关 + QR 配对；WS 脚本验证全链路 | 进行中 |
-| M4 | **Android App**（Kotlin + Compose）：实现同一套简化协议（会话列表 / 视图快照渲染 / 发消息） | 待启动 |
+| M3a | **daemon**：AHP 镜像（焦点会话 ChatState）+ 简化手机协议网关 + QR 配对；WS 脚本验证全链路 | ✅ 完成（2026-09-23：代码完成，真机接入，全链路验证通过） |
+| M4 | **Android App**（Kotlin + Compose）：实现同一套简化协议（会话列表 / 视图快照渲染 / 发消息） | 进行中（代码已提交 2026-09-23；剩余工作见 §15 M4-1~M4-4） |
 | M5 | 写增强：批准/拒绝、回答提问、打断 + 体验（托盘、推送、diff 完整交互） | 待启动 |
 
 ## 4. 现阶段不做
@@ -88,6 +89,9 @@
 | daemon 架构 | 不引入框架，现有裸 Node 骨架扩展（`src/ahp/` + `src/phone/` 模块） |
 | daemon 形态 | v1 纯后台进程 + 日志文件；托盘图标放 M5 |
 | 推送通知 | 待定（M5） |
+| **token 管理（2026-09-24 定稿）** | **注册表 `HKCU\Environment` 的 `VSCODE_AGENT_HOST_CONNECTION_TOKEN` 是唯一事实来源**（VS Code 读取处）；管理器 UI 读写注册表（预填以注册表为准、未设置留空，保存时写后读回校验）；daemon 启动时由管理器把注册表值注入 `AHP_TOKEN` 环境变量。token.txt 与 `launch-vscode-ahp.cmd` 退役删除 |
+| **daemon 运行时（2026-09-24 定稿）** | 保留**独立子进程**（崩溃隔离，不连累管理器 UI），但去掉 powershell→npm→tsx 进程链：`tsc` 编译到 `dist/`（`npm run build:daemon`），管理器用软件自带 Node 运行时（`ELECTRON_RUN_AS_NODE=1` + `process.execPath`）直启 `dist/server.js`，`detached` 防终端关闭连坐；自启（schtasks ONLOGON）走同一方式 |
+| **电脑端管理器（2026-09-24 定稿）** | Electron 托盘常驻应用（`manager/`）：AHP 环境变量读写、daemon/隧道生命周期、开机自启、一键重启 VS Code（AHP 环境变量生效）、状态轮询 + 绿/黄/红托盘图标 |
 
 ---
 
@@ -96,24 +100,26 @@
 ## 6. 总体架构
 
 ```
-Android App（瘦客户端）◀── 简化协议 JSON over WS（Tailscale，deviceToken 鉴权）──▶ 电脑端 daemon :8765
+Android App（瘦客户端）◀── 简化协议 JSON over WS（公网隧道 28765 / Tailscale，deviceToken 鉴权）──▶ 电脑端 daemon :8765
                                                                               │  AHP 官方 TS 包
                                                                               ▼
                                                                     VS Code agent host 进程 :8081
                                                                     ├── IPC 客户端：Agents 窗口（既有，不变）
                                                                     └── WS 客户端：daemon（新增，对等）
 PWA（过渡期开发工具）◀── AHP over WS（?tkn=token，直连，绕过 daemon）──▶ agent host
+
+Electron 管理器（托盘常驻）── 管理 ──▶ daemon（spawn，注入 AHP_TOKEN）/ 隧道（直接 spawn 系统 ssh.exe -R）/ 注册表 AHP 环境变量 / VS Code 重启
 ```
 
 - 单一事实来源 = VS Code agent host 进程内的真实 Copilot 会话（读/写都走 AHP 官方协议，无文件解析、无 UI 自动化、无平行 agent）
 - 手机和 PC 操作的是字面意义上的同一个 Copilot：daemon 与 Agents 窗口共享同一 StateManager，记忆 / harness / 模型配置天然一致；手机发的消息在 Agents 窗口里与用户亲手输入无异
 - **AHP 客户端逻辑在电脑端 daemon**（Node + 官方 `@microsoft/agent-host-protocol` TS 包，已验证）；daemon 订阅根通道 + 焦点会话的 session/chat 通道，用官方 `chatReducer` 维护 ChatState，节流 100ms 向手机推视图快照
 - **Android 是瘦客户端**：不实现 AHP，只实现简化协议（会话列表 / 视图快照渲染 / 发消息 / 切会话）；原始 AHP token 永不出电脑，手机只持 deviceToken
-- 进程拓扑：VS Code（含 agent host 子进程，带环境变量启动）+ daemon（`launch-vscode-ahp.cmd` 顺带拉起）；daemon 健康探测 + watch token.txt，VS Code 重启后自动重连
+- 进程拓扑：VS Code（含 agent host 子进程，带环境变量启动）+ daemon（管理器拉起，§9）；daemon 健康探测 + 3s 重连循环，VS Code 重启后自动重连
 - 协议版本漂移风险被隔离：AHP 版本变化只影响 daemon（Node 侧升级官方包即可），Android 协议是自研简单 JSON，不受影响
 
 **AHP 端到端 Spike 结论（2026-09-23，全链路验证通过，VS Code 1.136.2 + 真实 Copilot 账号）**：
-- **零改造启动**：agent host 进程读 `VSCODE_AGENT_HOST_PORT` / `VSCODE_AGENT_HOST_HOST` / `VSCODE_AGENT_HOST_CONNECTION_TOKEN` 环境变量，设置后即监听 TCP WebSocket 端口（`?tkn=` 查询参数认证）；桌面版 starter 深拷贝主进程 env 透传 → 带环境变量启动 VS Code 即可，零代码修改（启动器：`launch-vscode-ahp.cmd`）
+- **零改造启动**：agent host 进程读 `VSCODE_AGENT_HOST_PORT` / `VSCODE_AGENT_HOST_HOST` / `VSCODE_AGENT_HOST_CONNECTION_TOKEN` 环境变量，设置后即监听 TCP WebSocket 端口（`?tkn=` 查询参数认证）；桌面版 starter 深拷贝主进程 env 透传 → 带环境变量启动 VS Code 即可，零代码修改。变量由管理器写入注册表 `HKCU\Environment`（用户级，所有新进程可见），生效需冷启动 VS Code（管理器一键重启）
 - **多客户端共享状态**：外部客户端与 Agents 窗口是对等的 AHP 客户端，共享同一 AgentService/StateManager（官方源码注释明确"IPC 与 WebSocket 客户端共享状态"）
 - **已验证链路**：WS 连接 + token 认证 → `initialize`（协商 0.9.0，根快照含 Copilot agent）→ `createSession`（真实 git 状态检查）→ 向 **chat 通道** 发 `chat/pendingMessageSet` → 队列消费触发 `chat/turnStarted` → 会话实体化（`session/ready`）→ Copilot 真实执行（worktree 创建、流式输出、token 统计、`chat/turnComplete` 8 秒）
 - **关键陷阱**：消息必须 dispatch 到 `ahp-chat://` 通道，发到 session 通道队列不消费（QueueDrainContribution 只处理 chat 通道）
@@ -189,7 +195,7 @@ jsonl 记录结构（抽样验证）：
 
 - 官方规范：`microsoft/agent-host-protocol`（MIT，对标 LSP/DAP）；官方 TS 客户端 `@microsoft/agent-host-protocol@0.9.0`（npm，浏览器兼容、零依赖；入口 `/client`（AhpClient/AhpStateMirror）、`/ws`（WebSocketTransport）、`/hosts`（MultiHostClient 多主机编排 + 自动重连））
 - agent host 进程是 VS Code 子进程（每 user-data-dir 一个），随普通窗口启动；设置 `VSCODE_AGENT_HOST_PORT` 环境变量后监听 TCP 端口，与 IPC 客户端共享状态
-- 认证：WebSocket upgrade 用 `?tkn=` 查询参数校验 token；不设置 token 则无认证（危险，必须设置）
+- 认证：WebSocket upgrade 用 `?tkn=` 查询参数校验 token；不设置 token 则无认证（危险，必须设置）。token 唯一事实来源 = 注册表 `HKCU\Environment` 的 `VSCODE_AGENT_HOST_CONNECTION_TOKEN`（管理器写入）；daemon 经管理器注入的 `AHP_TOKEN` 环境变量获得（2026-09-24 起，token.txt 退役）
 - 协议版本协商：客户端在 `initialize.protocolVersions` 提供多版本，服务端选择（本机协商到 0.9.0；1.136.2 服务端亦支持 1.0.0）
 - 通道模型：`ahp-root://`（全局）/ `ahp-session:/<id>`（会话）/ `ahp-chat://default/<base64>`（聊天）；状态为快照 + 动作流，订阅即得全量快照
 - 主要命令：`listSessions` / `createSession` / `fetchTurns`（历史分页，turnsNextCursor）/ `subscribe`
@@ -207,9 +213,14 @@ jsonl 记录结构（抽样验证）：
 
 ## 9. daemon 架构（Node，pocket-copilot 演进）
 
-- 技术栈：TypeScript + ESM（`tsx` 直跑，无构建），**不引入框架**。服务 bind 0.0.0.0:8765（Tailscale 访问），`npm run dev` 启动；`launch-vscode-ahp.cmd` 顺带拉起
+- 技术栈：TypeScript + ESM，**不引入框架**。服务 bind 0.0.0.0:8765（公网隧道 / Tailscale 访问）
+- 构建与启动（2026-09-24 定稿）：
+  - `npm run build:daemon`（tsc → `dist/`，`tsconfig.build.json`）；开发期仍可 `npm run dev`（tsx 直跑）
+  - 管理器用软件自带 Node 运行时启动：`ELECTRON_RUN_AS_NODE=1` + `process.execPath` 直启 `dist/server.js`（独立子进程，崩溃隔离；`detached` 防终端关闭连坐）；不再依赖 powershell→npm→tsx 进程链
+  - 开机自启：schtasks ONLOGON 任务 `PocketCopilotDaemon` 跑管理器生成的 `start-daemon.ps1`（同一 Electron 运行时 + 从注册表读 token 注入 `AHP_TOKEN`）
+  - **token**：daemon 只读 `AHP_TOKEN` 环境变量（管理器启动时从注册表读出注入）；token.txt 已退役删除
 - 职责：
-  - **AHP 客户端**（`src/ahp/`）：官方 `@microsoft/agent-host-protocol` TS 包；连接/initialize/断线重连（watch token.txt + 健康探测 8081）；订阅根通道（会话列表）+ 焦点会话的 session/chat 通道；官方 `chatReducer` 维护 ChatState
+  - **AHP 客户端**（`src/ahp/`）：官方 `@microsoft/agent-host-protocol` TS 包；连接/initialize/断线重连（3s 重试循环 + 健康探测 8081）；订阅根通道（会话列表）+ 焦点会话的 session/chat 通道；官方 `chatReducer` 维护 ChatState
   - **简化手机协议网关**（`src/phone/`）：JSON over WS（`/ws` 路径 upgrade）；设备鉴权（deviceToken）；会话列表 / 视图快照（节流 100ms + 单调版本号）/ host 状态 事件扇出；命令（select/send，M5 加 stop/respond）
   - **配对**（`src/phone/pairing.ts`）：deviceToken 生成/校验（存 `%USERPROFILE%\.pocket-copilot\devices.json`）；QR 内容 `pocket-copilot://pair?host=<Tailscale-IP>&port=8765&device=<deviceToken>`
   - **静态托管 + 配置端点 + 健康检查**（既有，保留）：PWA 过渡期仍用
@@ -221,8 +232,19 @@ jsonl 记录结构（抽样验证）：
   - `src/phone/hub.ts`：手机 WS 连接管理、鉴权、扇出、心跳
   - `src/phone/pairing.ts`：deviceToken + QR
   - `src/server.ts`：既有 HTTP/静态/health + WS upgrade 路由
-- 生命周期：v1 纯后台进程 + 日志文件；托盘图标放 M5
+- 生命周期：管理器托管（启动/停止/状态轮询）；开机自启走 schtasks（§5）；日志 `%LOCALAPPDATA%\PocketCopilotManager\daemon.log`
 - 不引框架的理由：复杂度是纵向（AHP 状态 → 视图模型映射），框架提供的是横向抽象（路由/中间件），形状不匹配
+
+### 9.1 电脑端管理器（Electron，`manager/`，2026-09-24 新增）
+
+- 形态：Electron 托盘常驻应用（main.js CJS + 原生 HTML/JS renderer，preload contextBridge）；`window-all-closed` 不退（托盘常驻），退出前杀自己托管的 daemon/隧道
+- 职责：
+  - **AHP 环境变量**：读写注册表 `HKCU\Environment` 的 `VSCODE_AGENT_HOST_PORT` / `_HOST` / `_CONNECTION_TOKEN`（PowerShell `Get/Set-ItemProperty`）；UI 预填以注册表为准、未设置留空；保存时写后读回校验
+  - **daemon 生命周期**：启动（注入 `AHP_TOKEN`，产物缺失时提示先 `npm run build:daemon`）/ 停止（托管走 killTree，非托管按端口 8765 杀宿主）/ 状态轮询（3s，`/api/health`）
+  - **隧道**：直接 spawn 系统 `ssh.exe -R 28765→8765`（Win10 1809+ 自带 OpenSSH），重连循环在 main.js（断线 5s 重连；重连前先探活，公网已可达则 30s 复检不空转）；"隧道可用"状态以公网探活为准（SSH -R 只在服务器侧监听，本地无 28765 端口）
+  - **一键重启 VS Code**：杀全部 Code 进程 → 重新拉起工作区（AHP 环境变量冷启动生效，绕开单实例陷阱）
+  - **开机自启**：schtasks ONLOGON `PocketCopilotDaemon`（生成 start-daemon.ps1，不经过管理器直接启 daemon）
+- 日志：`%LOCALAPPDATA%\PocketCopilotManager\manager.log` / `daemon.log` / `tunnel.log`
 
 ## 10. 前端（PWA，过渡期开发工具）
 
@@ -239,10 +261,10 @@ jsonl 记录结构（抽样验证）：
 
 - **主数据面（最终形态）**：Android App ↔ daemon 走**简化协议 JSON over WS**（`ws://<Tailscale-IP>:8765/ws`，deviceToken 鉴权）；daemon ↔ agent host 走 AHP over WS（`?tkn=`）。AHP 的常开推送特性（快照 + 动作流）由 daemon 内部消化，对手机呈现为视图快照推送
 - **daemon → 手机推送**：视图快照制，节流 100ms + 单调版本号（手机忽略过期版本）；会话数据 KB 级，全量快照简单不出错
-- **断线重连**：daemon 侧 watch token.txt + 健康探测 8081，VS Code 重启后自动重连并重订阅（全量快照补齐）；Android 侧 WS 断线指数退避重连 + 重发 hello
+- **断线重连**：daemon 侧 3s 重试循环 + 健康探测 8081，VS Code 重启后自动重连并重订阅（全量快照补齐）；Android 侧 WS 断线指数退避重连 + 重发 hello
 - **静态托管**：PWA 过渡期由 daemon 托管（同端口出文件和配置）；Android 阶段 UI 打进包内，此部分退役
 - **网络**：Tailscale（PC + 手机）；仅自己访问；agent host 端口必须带 token（`?tkn=`，仅 daemon 持有）；手机只持 deviceToken（QR 配对下发）
-- **单实例陷阱**：环境变量只对首个 VS Code 进程生效；已有实例运行时新进程只转发即退出、端口不开 → 健康检查要能区分"VS Code 未启动"与"未带环境变量启动"，daemon 日志 + 手机显示指引（完全退出后用启动器冷启动）
+- **单实例陷阱**：环境变量只对首个 VS Code 进程生效；已有实例运行时新进程只转发即退出、端口不开 → 健康检查要能区分"VS Code 未启动"与"未带环境变量启动"；管理器提供一键重启 VS Code（杀进程 → 重新拉起工作区，冷启动生效）
 
 ## 12. 已否决的备选方案（含原因，避免重复讨论）
 
@@ -262,7 +284,7 @@ jsonl 记录结构（抽样验证）：
 ## 13. 风险与边界（必须接受）
 
 1. **AHP 协议版本漂移**：VS Code 升级可能带来协议版本变化（本机 1.136.2 服务端支持 0.9.0/1.0.0，与客户端库 0.9.0 协商）；npm 客户端库若滞后需同步升级。缓解：协议有版本协商、官方库随 VS Code 同步更新；**漂移被隔离在 daemon（Node 侧升级官方包即可），Android 自研协议不受影响**；开发期固定 VS Code 版本 + 冒烟回归（发消息→检查回复）
-2. **单实例冷启动陷阱**：环境变量只对首个 VS Code 进程生效；已有实例运行时新进程只转发即退出、端口不开。缓解：健康检查区分"VS Code 未启动"与"未带环境变量启动"，PWA 显示指引（完全退出后用启动器冷启动）；用户日常习惯双击桌面图标 → 启动器需改为快捷方式目标
+2. **单实例冷启动陷阱**：环境变量只对首个 VS Code 进程生效；已有实例运行时新进程只转发即退出、端口不开。缓解：健康检查区分"VS Code 未启动"与"未带环境变量启动"；管理器一键重启 VS Code（杀全部 Code 进程 → 重新拉起工作区）
 3. **VS Code 必须开着**：会话活在 VS Code 进程里，agent host 是 VS Code 子进程——这是接入本体的固有约束
 4. **Copilot 登录依赖**：agent host 用主 profile 的 Copilot 登录态；登录过期时 turn 报 authentication 错误（PWA 需明确透出该错误并提示重新登录）
 5. **worktree 副作用**：AHP 会话默认 `isolation: worktree`，Copilot 会在 `<repo>.worktrees/` 建 worktree（分支 `agents/<uuid>`）；与 Agents 窗口 PC 端行为一致，测试会话结束后需清理 worktree + 分支
@@ -289,7 +311,7 @@ Spike 链：**1.5a → 1.5 → 2（已完成，方案退役）→ 3（AHP 端到
 2. ~~Spike 2（UIA 写路径）~~（实测通过，方案 2026-09-23 退役）
 3. ~~Spike 3（AHP 端到端）~~（2026-09-23 实测通过，AHP 主路径定稿，见 6/7.6）
 4. **M1 读全通（AHP）**：
-   - 启动器加固：`launch-vscode-ahp.cmd` 首次运行自动生成 token 并持久化到 `%USERPROFILE%\.pocket-copilot\`（token 不硬编码进仓库）；桌面快捷方式目标改为启动器
+   - 启动器加固：`launch-vscode-ahp.cmd` 首次运行自动生成 token 并持久化到 `%USERPROFILE%\.pocket-copilot\`（token 不硬编码进仓库）；桌面快捷方式目标改为启动器（2026-09-24 退役：token 管理改由管理器写注册表，启动器删除）
    - web/：引入 `@microsoft/agent-host-protocol`，store.ts 重构（AhpStateMirror + zustand），convert.ts 重写（AHP 状态 → 视图模型）；展示层组件复用
    - src/：瘦身为薄服务（静态托管 + 配置端点 + agent host 端口健康检查）；删除旧数据面代码（约 2000 行，见 §8）
    - 验收：手机（Tailscale）打开 `http://<PC的tailscale-ip>:8765` → 会话总览 → 完整历史 → PC 侧真实会话实时流式
@@ -297,9 +319,22 @@ Spike 链：**1.5a → 1.5 → 2（已完成，方案退役）→ 3（AHP 端到
 6. **M3a daemon**（2026-09-23 端形态定稿后新增）：
    - `src/ahp/`：connection.ts（连接/重连，store.ts 状态机移植）+ mirror.ts（根通道会话列表 + 焦点会话 ChatState）+ view.ts（convert.ts 移植 → 视图快照）
    - `src/phone/`：protocol.ts（协议类型）+ hub.ts（WS 连接管理/鉴权/扇出/心跳）+ pairing.ts（deviceToken + QR）
-   - `src/server.ts`：加 WS upgrade 路由（`/ws`）；`launch-vscode-ahp.cmd` 顺带拉起 daemon
+   - `src/server.ts`：加 WS upgrade 路由（`/ws`）；daemon 启动方式见 §9（2026-09-24 起由管理器拉起，原"启动器顺带拉起"退役）
    - 验收：WS 脚本全链路（hello 鉴权 → welcome 会话列表 → 焦点会话视图快照随 PC 侧 turn 流式更新 → send → Copilot 执行 → 回显）
 7. **M4 Android App**：Kotlin + Jetpack Compose；实现同一套简化协议（QR 配对 → 会话列表 → 视图快照渲染 → 发消息）；真机（Tailscale）验收
+   - 已完成（2026-09-23，`4a5e737`）：QR 扫码配对（deep link + 手动输入兜底）、会话列表 + 标题下拉切会话、视图快照渲染（Markdown/代码高亮/reasoning/工具步骤组/pending 回显）、发消息、前台 Service 保活 + 常驻通知、WS 指数退避重连
+   - **M4-1（阻塞，优先）** 手机心跳断开循环：daemon.log 反复"手机已连接 → 30s 心跳超时断开 → 重连"。daemon 侧 ping/pong 30s 判活，OkHttp 会自动回 pong，pong 回不来 = 手机侧 socket 被系统冻结（Doze/锁屏/Wi-Fi 省电），非协议 bug。
+     - 动作：① 复现定位（锁屏/后台分别测，确认触发条件）；② daemon 心跳放宽到 60~120s；③ Android 引导用户关闭电池优化（`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`）
+     - 验收：锁屏 + 后台 30 分钟以上连接不断；daemon.log 无心跳超时循环
+   - **M4-2** 全量历史（fetchTurns 分页）上 daemon 链路：PWA 有"加载更早历史"（`fetchTurns` + `turnsNextCursor`），daemon mirror 只吃订阅快照，ChatState.turns 是滑动窗口，Android 看不到完整历史（M1 验收标准"全量历史"在 Android 路径未覆盖）。
+     - 动作：① protocol.ts 加 `loadOlder` 命令；② daemon mirror 响应命令发 `fetchTurns`，`turnsLoaded` 经 chatReducer 回流后自动重推视图；③ Android 消息流顶部加"加载更早"按钮
+     - 验收：Android 进入历史较长的会话，可分页加载到最早 turn；加载后新内容继续流式正常
+   - **M4-3** "Considering" 卡住兜底（§13.9 关联）：长 turn 结束后 thinking 块偶发不 finalize（agent host 已 Idle，仅 UI 未收尾），Android 步骤组会永远显示 "Working…"。
+     - 动作：① UI 兜底（turn 结束/状态回 Idle 后强制收尾步骤组）；② 根因定位（是否"存在第二个 AHP 客户端"触发）后置，不阻塞 M4
+     - 验收：长 turn 结束后步骤组正常收尾；复现样本记录在案
+   - **M4-4** 真机验收 + 文档收尾：
+     - 动作：① 修完 M4-1 后真机（Tailscale）跑完整链路（配对 → 会话列表 → 流式渲染 → 切会话 → 发消息 → 历史分页）并记录结果；② 更新本文档里程碑表与验收记录；③ 小项（不阻塞）：daemon 侧设备名硬编码 `'phone'`，配对时可带设备名
+     - 验收：M4 里程碑状态更新为 ✅，本文档同步
 8. **M5 写增强 + 体验**：批准/拒绝（`chat/toolCallConfirmed`）、回答提问（`chat/inputAnswerChanged`/`inputCompleted`）、打断（`chat/turnCancelled` 细节验证）、托盘、推送、diff 完整交互
 
 ## 16. 用户偏好（新会话必须遵守）
