@@ -38,18 +38,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -65,16 +65,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Popup
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
@@ -112,6 +119,10 @@ fun ChatScreen(vm: AppViewModel) {
     var input by remember { mutableStateOf("") }
     var drawerOpen by remember { mutableStateOf(false) }
     var titleMenuOpen by remember { mutableStateOf(false) }
+    var confirmDisconnect by remember { mutableStateOf(false) }
+    // 标题在窗口中的位置（px，自定义下拉菜单居中定位用）
+    var titleCenterX by remember { mutableStateOf(0) }
+    var titleBottom by remember { mutableStateOf(0) }
 
     val v = view
     val running = v?.streaming == true
@@ -172,6 +183,11 @@ fun ChatScreen(vm: AppViewModel) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
+                            .onGloballyPositioned { coords ->
+                                val pos = coords.positionInRoot()
+                                titleCenterX = (pos.x + coords.size.width / 2f).roundToInt()
+                                titleBottom = (pos.y + coords.size.height).roundToInt()
+                            }
                             .clip(RoundedCornerShape(8.dp))
                             .clickable(enabled = titleMenuList.size > 1) {
                                 titleMenuOpen = !titleMenuOpen
@@ -190,35 +206,73 @@ fun ChatScreen(vm: AppViewModel) {
                         if (titleMenuList.size > 1) {
                             Spacer(Modifier.width(4.dp))
                             Icon(
-                                Icons.Filled.ArrowDropDown,
+                                Icons.Filled.ExpandMore,
                                 contentDescription = "切换会话",
-                                tint = MutedFg,
-                                modifier = Modifier.size(14.dp),
-                            )
-                        }
-                    }
-                    DropdownMenu(
-                        expanded = titleMenuOpen,
-                        onDismissRequest = { titleMenuOpen = false },
-                    ) {
-                        titleMenuList.forEach { s ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        s.title.ifBlank { s.id.take(8) },
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                },
-                                onClick = {
-                                    titleMenuOpen = false
-                                    if (s.id != focus) vm.select(s.id)
-                                },
+                                tint = Fg,
+                                modifier = Modifier.size(16.dp),
                             )
                         }
                     }
                 }
                 StatusDot(clientState)
+            }
+
+            // ---- 会话切换菜单：自定义 Popup，水平中心对准标题中心（M3 1.3 的 DropdownMenu 不支持居中锚定）----
+            if (titleMenuOpen) {
+                val density = LocalDensity.current
+                val menuWidthPx = with(density) { 240.dp.toPx().roundToInt() }
+                val marginPx = with(density) { 8.dp.toPx().roundToInt() }
+                val screenPx = with(density) { LocalConfiguration.current.screenWidthDp.dp.toPx().roundToInt() }
+                Popup(
+                    alignment = Alignment.TopStart,
+                    offset = IntOffset(
+                        x = (titleCenterX - menuWidthPx / 2)
+                            .coerceIn(marginPx, (screenPx - menuWidthPx - marginPx).coerceAtLeast(marginPx)),
+                        y = titleBottom + with(density) { 4.dp.toPx().roundToInt() },
+                    ),
+                    onDismissRequest = { titleMenuOpen = false },
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .width(240.dp)
+                            .shadow(8.dp, RoundedCornerShape(12.dp), ambientColor = Color(0x99000000), spotColor = Color(0x99000000))
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF2D2F31))
+                            .border(1.dp, Color(0xFF3F4245), RoundedCornerShape(12.dp)),
+                    ) {
+                        titleMenuList.forEach { s ->
+                            val active = s.id == focus
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(if (active) Muted else Color.Transparent)
+                                    .clickable {
+                                        titleMenuOpen = false
+                                        if (!active) vm.select(s.id)
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    s.title.ifBlank { s.id.take(8) },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = if (active) Link else Fg,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (active) {
+                                    Icon(
+                                        Icons.Filled.CheckCircle,
+                                        contentDescription = null,
+                                        tint = Link,
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // ---- 错误条 ----
@@ -239,7 +293,7 @@ fun ChatScreen(vm: AppViewModel) {
 
             // ---- 消息区（weight 占满剩余高度，给输入区留出空间）----
             Box(
-                modifier = Modifier.fillMaxWidth().weight(1f),
+                modifier = Modifier.fillMaxWidth().weight(1f).fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
             if (clientState != PocketClient.ClientState.AUTHENTICATED) {
@@ -419,6 +473,29 @@ fun ChatScreen(vm: AppViewModel) {
                     vm.select(id)
                     drawerOpen = false
                 },
+                onDisconnect = { confirmDisconnect = true },
+            )
+        }
+
+        // ---- 断开连接确认（会清除已保存的连接信息）----
+        if (confirmDisconnect) {
+            AlertDialog(
+                onDismissRequest = { confirmDisconnect = false },
+                title = { Text("断开连接") },
+                text = {
+                    Text("将断开与电脑端的连接，并清除已保存的连接信息。之后需要重新输入 IP、端口等信息。")
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            confirmDisconnect = false
+                            vm.disconnect()
+                        },
+                    ) { Text("断开", color = Color(0xFFF48771)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmDisconnect = false }) { Text("取消") }
+                },
             )
         }
     }
@@ -429,6 +506,7 @@ private fun Sidebar(
     sessions: List<PhoneSession>,
     focus: String?,
     onPick: (String) -> Unit,
+    onDisconnect: () -> Unit,
 ) {
     val activeProject = remember(sessions, focus) {
         sessions.firstOrNull { it.id == focus }?.project
@@ -446,14 +524,16 @@ private fun Sidebar(
         modifier = Modifier
             .fillMaxSize()
             .background(CardBg)
-            .border(width = 1.dp, color = Border),
+            .border(width = 1.dp, color = Border)
+            .statusBarsPadding() // 边到边模式：避开状态栏/灵动岛
+            .navigationBarsPadding(), // 避开底部主页指示条
     ) {
         Text(
             "会话",
-            style = MaterialTheme.typography.titleSmall,
+            style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
             color = Fg,
-            modifier = Modifier.padding(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 10.dp),
+            modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 12.dp),
         )
         if (groups.isEmpty()) {
             Text(
@@ -463,7 +543,10 @@ private fun Sidebar(
                 modifier = Modifier.padding(16.dp),
             )
         }
-        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(8.dp)) {
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(8.dp),
+        ) {
             items(groups, key = { it.first }) { (project, list, _) ->
                 val active = project == activeProject
                 Column(
@@ -492,6 +575,31 @@ private fun Sidebar(
                     )
                 }
             }
+        }
+        // 底部：断开连接（返回配对屏重新输入），红色描边按钮提示破坏性操作
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .border(1.dp, Color(0x66F48771), RoundedCornerShape(10.dp))
+                .background(Color(0x14F48771))
+                .clickable { onDisconnect() }
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.Logout,
+                contentDescription = null,
+                tint = Color(0xFFF48771),
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "断开连接",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(0xFFF48771),
+            )
         }
     }
 }
