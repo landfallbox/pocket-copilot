@@ -1,0 +1,6 @@
+interface:
+  display_name: "Chat with Comfy"
+  short_description: "通过本地 ComfyUI 工作流生成图片或视频"
+  default_prompt: "Use $chat-with-comfy to generate the image or video I describe."
+policy:
+  allow_implicit_invocation: true
