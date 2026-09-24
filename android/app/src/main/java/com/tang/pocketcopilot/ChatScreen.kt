@@ -124,7 +124,7 @@ fun ChatScreen(vm: AppViewModel) {
         if (activeProject == null) emptyList()
         else sessions.filter { it.project == activeProject }
     }
-    val displayTitle = remember(sessions, focus) {
+    val displayTitle = remember(sessions, focus, clientState) {
         sessions.firstOrNull { it.id == focus }?.title?.ifBlank { null }
             ?: if (clientState == PocketClient.ClientState.AUTHENTICATED) "Pocket Copilot" else "连接中…"
     }
