@@ -160,11 +160,13 @@ function handlePair(req: http.IncomingMessage, res: http.ServerResponse): void {
     }
     void (async () => {
       const deviceToken = await registerDevice(name);
-      // host 由客户端指定（跨设备时传 Tailscale IP）；缺省回环
+      // host/port 由客户端指定（跨设备时传 Tailscale IP / 公网映射端口）；缺省回环 + 本机端口
       let host = '127.0.0.1';
+      let port = PORT;
       try {
-        const h = JSON.parse(body).host;
-        if (typeof h === 'string' && h.length > 0) host = h;
+        const p = JSON.parse(body);
+        if (typeof p.host === 'string' && p.host.length > 0) host = p.host;
+        if (Number.isInteger(p.port) && p.port > 0) port = p.port;
       } catch {
         // 忽略
       }
@@ -172,7 +174,7 @@ function handlePair(req: http.IncomingMessage, res: http.ServerResponse): void {
       res.end(
         JSON.stringify({
           deviceToken,
-          qr: qrPayload(host, PORT, deviceToken),
+          qr: qrPayload(host, port, deviceToken),
         }),
       );
     })();
