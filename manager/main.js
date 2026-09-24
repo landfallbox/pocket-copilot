@@ -90,7 +90,7 @@ function crc32(buf) {
   return (c ^ 0xffffffff) >>> 0;
 }
 
-/** 生成纯色圆点 PNG（托盘用，避免额外图标资源） */
+/** 生成纯色圆点 PNG（托盘底图缺失时的兜底） */
 function dotPng(r, g, b, size = 16) {
   const stride = 1 + size * 4;
   const raw = Buffer.alloc(size * stride);
@@ -121,9 +121,45 @@ function dotPng(r, g, b, size = 16) {
   return Buffer.concat([sig, mkChunk('IHDR', ihdr), mkChunk('IDAT', zlib.deflateSync(raw)), mkChunk('IEND', Buffer.alloc(0))]);
 }
 
-const ICON_GREEN = dotPng(84, 176, 84);
-const ICON_YELLOW = dotPng(230, 180, 60);
-const ICON_RED = dotPng(220, 80, 70);
+const TRAY_DOT_COLORS = {
+  green: [84, 176, 84],
+  yellow: [230, 180, 60],
+  red: [220, 80, 70],
+};
+
+/**
+ * 托盘图标 = 新应用图标（tray-icon.png，32×32）+ 右下角状态点。
+ * toBitmap 返回 BGRA 缓冲，合成状态点后经 createFromBitmap 重建。
+ * 底图缺失/异常时退回纯色圆点（dotPng）。
+ */
+function makeTrayIcon([r, g, b]) {
+  const base = nativeImage.createFromPath(path.join(__dirname, 'tray-icon.png'));
+  const { width: s, height } = base.getSize();
+  if (!s || s !== height) return dotPng(r, g, b);
+  const bmp = Buffer.from(base.toBitmap());
+  const d = Math.max(4, Math.round(s * 0.34));
+  const rad = d / 2;
+  const ow = Math.max(1, Math.round(s * 0.06)) / 2; // 白描边半宽
+  const cx = s - rad;
+  const cy = height - rad;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < s; x++) {
+      const dist = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+      if (dist > rad + ow) continue;
+      const off = (y * s + x) * 4;
+      if (dist <= rad - ow) {
+        bmp[off] = b; bmp[off + 1] = g; bmp[off + 2] = r; bmp[off + 3] = 255;
+      } else {
+        bmp[off] = 255; bmp[off + 1] = 255; bmp[off + 2] = 255; bmp[off + 3] = 255;
+      }
+    }
+  }
+  return nativeImage.createFromBitmap(bmp, { width: s, height }).toPNG();
+}
+
+const ICON_GREEN = makeTrayIcon(TRAY_DOT_COLORS.green);
+const ICON_YELLOW = makeTrayIcon(TRAY_DOT_COLORS.yellow);
+const ICON_RED = makeTrayIcon(TRAY_DOT_COLORS.red);
 
 /** 读取 HKCU\Environment 中的三个 AHP 变量（JSON 输出，未设置为 null） */
 async function readEnvVars() {
@@ -520,6 +556,7 @@ function createWindow() {
     minWidth: 760,
     minHeight: 560,
     title: 'pocket-copilot 管理器',
+    icon: path.join(__dirname, 'icon.ico'),
     backgroundColor: '#0b0d12',
     show: false,
     webPreferences: {
