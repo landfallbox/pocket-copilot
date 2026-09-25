@@ -75,6 +75,25 @@ data class PhoneSession(
     val activity: String? = null,
     val modifiedAt: String,
     val project: String? = null,
+    val projectUri: String? = null,
+    val archived: Boolean = false,
+)
+
+/** 可新建会话的项目（镜像 PhoneProject） */
+data class PhoneProject(val uri: String, val name: String)
+
+/** 新建会话的可选配置项（镜像 SessionConfigOption） */
+data class SessionConfigOption(
+    val key: String,
+    val label: String,
+    val value: String?,
+    val options: List<String>,
+)
+
+/** 某项目的会话配置（新建会话确认弹窗用，镜像 PhoneSessionConfig） */
+data class PhoneSessionConfig(
+    val projectUri: String,
+    val options: List<SessionConfigOption>,
 )
 
 // ---------------------------------------------------------------------------
@@ -84,6 +103,10 @@ data class PhoneSession(
 sealed class DaemonEvent {
     data class Welcome(val sessions: List<PhoneSession>, val focus: String?) : DaemonEvent()
     data class Sessions(val items: List<PhoneSession>) : DaemonEvent()
+    data class Focus(val id: String?) : DaemonEvent()
+    data class Projects(val items: List<PhoneProject>) : DaemonEvent()
+    data class SessionCreated(val id: String) : DaemonEvent()
+    data class ConfigResolved(val config: PhoneSessionConfig) : DaemonEvent()
     data class Chat(val id: String, val v: Long, val view: ChatView) : DaemonEvent()
     data class Host(val ok: Boolean) : DaemonEvent()
     data class Error(val msg: String) : DaemonEvent()
@@ -97,6 +120,38 @@ sealed class DaemonEvent {
             "sessions" -> Sessions(
                 o.getAsJsonArray("items")?.map { sessionFromJson(it.asJsonObject) }.orEmpty(),
             )
+            "focus" -> Focus(
+                o.get("id")?.takeIf { !it.isJsonNull }?.asString,
+            )
+            "projects" -> Projects(
+                o.getAsJsonArray("items")?.mapNotNull { p ->
+                    val po = p.asJsonObject
+                    val uri = po.get("uri")?.takeIf { !it.isJsonNull }?.asString ?: return@mapNotNull null
+                    PhoneProject(uri, po.get("name")?.takeIf { !it.isJsonNull }?.asString.orEmpty())
+                }.orEmpty(),
+            )
+            "sessionCreated" -> SessionCreated(
+                o.get("id")?.takeIf { !it.isJsonNull }?.asString.orEmpty(),
+            )
+            "configResolved" -> {
+                val c = o.getAsJsonObject("config")
+                ConfigResolved(
+                    PhoneSessionConfig(
+                        projectUri = c.get("projectUri")?.takeIf { !it.isJsonNull }?.asString.orEmpty(),
+                        options = c.getAsJsonArray("options")?.mapNotNull { ito ->
+                            val oo = ito.asJsonObject
+                            SessionConfigOption(
+                                key = oo.get("key")?.takeIf { !it.isJsonNull }?.asString.orEmpty(),
+                                label = oo.get("label")?.takeIf { !it.isJsonNull }?.asString.orEmpty(),
+                                value = oo.get("value")?.takeIf { !it.isJsonNull }?.asString,
+                                options = oo.getAsJsonArray("options")
+                                    ?.map { ito.asString }
+                                    .orEmpty(),
+                            )
+                        }.orEmpty(),
+                    ),
+                )
+            }
             "chat" -> {
                 val vc = o.getAsJsonObject("view")
                 Chat(
@@ -129,6 +184,8 @@ sealed class DaemonEvent {
             activity = o.get("activity")?.takeIf { !it.isJsonNull }?.asString,
             modifiedAt = o.get("modifiedAt")?.takeIf { !it.isJsonNull }?.asString.orEmpty(),
             project = o.get("project")?.takeIf { !it.isJsonNull }?.asString,
+            projectUri = o.get("projectUri")?.takeIf { !it.isJsonNull }?.asString,
+            archived = o.get("archived")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
         )
     }
 }
@@ -141,6 +198,23 @@ object Commands {
     fun hello(device: String) = gson.toJson(mapOf("t" to "hello", "device" to device))
     fun select(id: String) = gson.toJson(mapOf("t" to "select", "id" to id))
     fun send(text: String) = gson.toJson(mapOf("t" to "send", "text" to text))
+    /** 在焦点会话所属项目下新建会话 */
+    fun newSession() = gson.toJson(mapOf("t" to "newSession"))
+    /** 在指定项目下新建会话（config 为手机确认后的配置） */
+    fun newSessionIn(projectUri: String, config: Map<String, Any>? = null) =
+        gson.toJson(
+            buildMap {
+                put("t", "newSessionIn")
+                put("projectUri", projectUri)
+                if (config != null) put("config", config)
+            },
+        )
+    /** 请求解析项目的会话配置（新建会话确认弹窗用） */
+    fun resolveConfig(projectUri: String) = gson.toJson(mapOf("t" to "resolveConfig", "projectUri" to projectUri))
+    /** 标记 / 取消标记会话完成 */
+    fun setArchived(id: String, archived: Boolean) = gson.toJson(mapOf("t" to "setArchived", "id" to id, "archived" to archived))
+    /** 请求可新建会话的项目列表 */
+    fun listProjects() = gson.toJson(mapOf("t" to "listProjects"))
 }
 
 val gson = Gson()

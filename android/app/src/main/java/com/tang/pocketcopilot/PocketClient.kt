@@ -69,6 +69,31 @@ class PocketClient(
         socket?.send(Commands.send(text))
     }
 
+    fun newSession() {
+        if (!authed.get()) return
+        socket?.send(Commands.newSession())
+    }
+
+    fun newSessionIn(projectUri: String, config: Map<String, Any>? = null) {
+        if (!authed.get()) return
+        socket?.send(Commands.newSessionIn(projectUri, config))
+    }
+
+    fun resolveConfig(projectUri: String) {
+        if (!authed.get()) return
+        socket?.send(Commands.resolveConfig(projectUri))
+    }
+
+    fun setArchived(id: String, archived: Boolean) {
+        if (!authed.get()) return
+        socket?.send(Commands.setArchived(id, archived))
+    }
+
+    fun listProjects() {
+        if (!authed.get()) return
+        socket?.send(Commands.listProjects())
+    }
+
     // -------------------------------------------------------------------------
 
     private fun connectNow() {

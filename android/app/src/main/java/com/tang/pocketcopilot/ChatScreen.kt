@@ -45,11 +45,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Public
@@ -57,8 +59,12 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -122,6 +128,10 @@ private val Success = Color(0xFF54B054)
 fun ChatScreen(vm: AppViewModel) {
     val clientState by vm.clientState.collectAsStateWithLifecycle()
     val sessions by vm.sessions.collectAsStateWithLifecycle()
+    val visibleSessions by vm.visibleSessions.collectAsStateWithLifecycle()
+    val showArchived by vm.showArchived.collectAsStateWithLifecycle()
+    val projects by vm.projects.collectAsStateWithLifecycle()
+    val pendingConfig by vm.pendingConfig.collectAsStateWithLifecycle()
     val focus by vm.focus.collectAsStateWithLifecycle()
     val view by vm.view.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
@@ -168,9 +178,9 @@ fun ChatScreen(vm: AppViewModel) {
     val activeProject = remember(sessions, focus) {
         sessions.firstOrNull { it.id == focus }?.project
     }
-    val titleMenuList = remember(sessions, activeProject) {
+    val titleMenuList = remember(visibleSessions, activeProject) {
         if (activeProject == null) emptyList()
-        else sessions.filter { it.project == activeProject }
+        else visibleSessions.filter { it.project == activeProject }
     }
     val displayTitle = remember(sessions, focus, clientState) {
         sessions.firstOrNull { it.id == focus }?.title?.ifBlank { null }
@@ -226,7 +236,7 @@ fun ChatScreen(vm: AppViewModel) {
                                 titleBottom = (pos.y + coords.size.height).roundToInt()
                             }
                             .clip(RoundedCornerShape(8.dp))
-                            .clickable(enabled = titleMenuList.size > 1) {
+                            .clickable(enabled = focus != null) {
                                 titleMenuOpen = !titleMenuOpen
                             }
                             .padding(horizontal = 8.dp, vertical = 4.dp),
@@ -240,7 +250,7 @@ fun ChatScreen(vm: AppViewModel) {
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.widthIn(max = 220.dp),
                         )
-                        if (titleMenuList.size > 1) {
+                        if (focus != null) {
                             Spacer(Modifier.width(4.dp))
                             Icon(
                                 Icons.Filled.ExpandMore,
@@ -306,6 +316,34 @@ fun ChatScreen(vm: AppViewModel) {
                                         modifier = Modifier.size(14.dp),
                                     )
                                 }
+                            }
+                        }
+                        // 标记完成 / 恢复（archived）
+                        val focused = sessions.firstOrNull { it.id == focus }
+                        if (focused != null) {
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = Color(0xFF3F4245))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        titleMenuOpen = false
+                                        vm.setArchived(focused.id, !focused.archived)
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    Icons.Filled.CheckCircle,
+                                    contentDescription = null,
+                                    tint = MutedFg,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    if (focused.archived) "恢复会话" else "标记为完成",
+                                    color = Fg,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
                             }
                         }
                     }
@@ -506,16 +544,27 @@ fun ChatScreen(vm: AppViewModel) {
                 ),
         ) {
             Sidebar(
-                sessions = sessions,
+                sessions = visibleSessions,
+                showArchived = showArchived,
+                onToggleArchived = { vm.setShowArchived(it) },
+                projects = projects,
                 focus = focus,
                 onPick = { id ->
                     vm.select(id)
                     drawerOpen = false
                 },
+                onNewSession = {
+                    vm.newSession()
+                    drawerOpen = false
+                },
+                onNewProjectIn = { projectUri ->
+                    vm.resolveConfig(projectUri)
+                    drawerOpen = false
+                },
+                onListProjects = { vm.listProjects() },
                 onDisconnect = { confirmDisconnect = true },
             )
         }
-
         // ---- 断开连接确认（会清除已保存的连接信息）----
         if (confirmDisconnect) {
             AlertDialog(
@@ -537,19 +586,86 @@ fun ChatScreen(vm: AppViewModel) {
                 },
             )
         }
+        // ---- 新建会话确认弹窗（展示 isolation/mode 等，让用户确认）----
+        pendingConfig?.let { pc -> NewSessionConfirmDialog(config = pc, onConfirm = { cfg -> vm.confirmNewSession(cfg) }, onDismiss = { vm.cancelNewSession() }) }
     }
+}
+
+/** 新建会话确认弹窗：列出可配置项（isolation/mode/...），用户可调后确认创建 */
+@Composable
+private fun NewSessionConfirmDialog(
+    config: PhoneSessionConfig,
+    onConfirm: (Map<String, Any>?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    // 用户可调整的配置值（key → 选中值），初始为服务端默认
+    var values by remember(config) {
+        mutableStateOf(config.options.associate { it.key to (it.value ?: it.options.firstOrNull() ?: "") })
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("新建会话") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                config.options.forEach { opt ->
+                    if (opt.options.isEmpty()) {
+                        // 无可选值：只读展示
+                        Column {
+                            Text(opt.label, style = MaterialTheme.typography.labelMedium, color = MutedFg)
+                            Text(values[opt.key] ?: "-", style = MaterialTheme.typography.bodyMedium, color = Fg)
+                        }
+                    } else {
+                        Column {
+                            Text(opt.label, style = MaterialTheme.typography.labelMedium, color = MutedFg)
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.padding(top = 4.dp),
+                            ) {
+                                opt.options.forEach { o ->
+                                    val selected = values[opt.key] == o
+                                    Surface(
+                                        onClick = { values = values + (opt.key to o) },
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (selected) Accent else CardBg,
+                                        contentColor = if (selected) Color.White else Fg,
+                                    ) {
+                                        Text(o, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onConfirm(values.filterValues { it.isNotBlank() }.ifEmpty { null })
+            }) { Text("创建") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
 }
 
 @Composable
 private fun Sidebar(
     sessions: List<PhoneSession>,
+    showArchived: Boolean,
+    onToggleArchived: (Boolean) -> Unit,
+    projects: List<PhoneProject>,
     focus: String?,
     onPick: (String) -> Unit,
+    onNewSession: () -> Unit,
+    onNewProjectIn: (projectUri: String) -> Unit,
+    onListProjects: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
     val activeProject = remember(sessions, focus) {
         sessions.firstOrNull { it.id == focus }?.project
     }
+    var projectPickerOpen by remember { mutableStateOf(false) }
     // 按项目分组，组内按修改时间倒序，组间按最近活动倒序（匹配 PWA）
     val groups = remember(sessions) {
         sessions
@@ -567,13 +683,36 @@ private fun Sidebar(
             .statusBarsPadding() // 边到边模式：避开状态栏/灵动岛
             .navigationBarsPadding(), // 避开底部主页指示条
     ) {
-        Text(
-            "会话",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = Fg,
-            modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 12.dp),
-        )
+        // 顶栏：标题 + 新建会话 / 新建项目
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, top = 16.dp, end = 8.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "会话",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = Fg,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = onNewSession,
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = "新建会话", tint = Fg, modifier = Modifier.size(20.dp))
+            }
+            IconButton(
+                onClick = {
+                    onListProjects()
+                    projectPickerOpen = true
+                },
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(Icons.Filled.Folder, contentDescription = "新建项目", tint = Fg, modifier = Modifier.size(20.dp))
+            }
+        }
         if (groups.isEmpty()) {
             Text(
                 "暂无项目",
@@ -615,7 +754,26 @@ private fun Sidebar(
                 }
             }
         }
-        // 底部：断开连接（返回配对屏重新输入），红色描边按钮提示破坏性操作
+        // 底部：显示已完成开关（默认关闭，与电脑端一致隐藏已标记完成的会话）
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(CardBg)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "显示已完成",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Fg,
+                modifier = Modifier.weight(1f),
+            )
+            Switch(
+                checked = showArchived,
+                onCheckedChange = onToggleArchived,
+            )
+        }
+        // 断开连接（返回配对屏重新输入），红色描边按钮提示破坏性操作
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -638,6 +796,45 @@ private fun Sidebar(
                 "断开连接",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color(0xFFF48771),
+            )
+        }
+        // 新建项目选择器：只列出 VS Code 以前打开过的项目（对齐 agent 窗口）
+        if (projectPickerOpen) {
+            AlertDialog(
+                onDismissRequest = { projectPickerOpen = false },
+                title = { Text("新建项目") },
+                text = {
+                    if (projects.isEmpty()) {
+                        Text("暂无可选项目", color = MutedFg)
+                    } else {
+                        Column {
+                            projects.forEach { p ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            projectPickerOpen = false
+                                            onNewProjectIn(p.uri)
+                                        }
+                                        .padding(vertical = 10.dp, horizontal = 4.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Folder,
+                                        contentDescription = null,
+                                        tint = MutedFg,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(p.name, color = Fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { projectPickerOpen = false }) { Text("关闭") }
+                },
             )
         }
     }

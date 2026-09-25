@@ -36,6 +36,7 @@ const mirror = new AhpMirror({
   onSessions: (s) => hub.onSessions(s),
   onChat: (sessionId, chat) => hub.onChat(sessionId, chat),
   onFocusChanging: (sessionId) => hub.onFocusChanging(sessionId),
+  onFocus: (sessionId) => hub.onFocus(sessionId),
 });
 hub = new PhoneHub(mirror);
 

@@ -38,6 +38,36 @@ export interface PhoneSession {
   modifiedAt: string;
   /** 项目名（AHP project.name，可能为空） */
   project: string | null;
+  /** 项目 URI（file://...，新建会话时回传给 daemon 定位工作目录） */
+  projectUri: string | null;
+  /** 是否已标记完成（archived） */
+  archived: boolean;
+}
+
+/** 可新建会话的项目（合并 AHP 会话目录 + VS Code 最近打开） */
+export interface PhoneProject {
+  /** 项目 URI（file://...） */
+  uri: string;
+  /** 项目名（目录名） */
+  name: string;
+}
+
+/** 新建会话的可选配置项（来自 resolveSessionConfig 的 schema + values） */
+export interface SessionConfigOption {
+  /** 配置键（如 isolation / mode） */
+  key: string;
+  /** 展示标题（schema.title，缺省用 key） */
+  label: string;
+  /** 当前值（服务端默认或用户已选） */
+  value: string | null;
+  /** 可选值列表（schema.enum；无 enum 则不可选） */
+  options: string[];
+}
+
+/** 某项目的会话配置（新建会话确认弹窗用） */
+export interface PhoneSessionConfig {
+  projectUri: string;
+  options: SessionConfigOption[];
 }
 
 // ---------------------------------------------------------------------------
@@ -62,7 +92,47 @@ export interface SendMsg {
   text: string;
 }
 
-export type PhoneCommand = HelloMsg | SelectMsg | SendMsg;
+/** 在焦点会话所属项目下新建会话（不带 projectUri 时） */
+export interface NewSessionMsg {
+  t: 'newSession';
+}
+
+/** 在指定项目下新建会话（config 为手机确认后的会话配置） */
+export interface NewSessionInMsg {
+  t: 'newSessionIn';
+  /** 项目 URI（file://...） */
+  projectUri: string;
+  /** 手机确认的会话配置（isolation/mode/... ），缺省用服务端默认 */
+  config?: Record<string, unknown>;
+}
+
+/** 请求解析某项目的会话配置（新建会话确认弹窗用） */
+export interface ResolveConfigMsg {
+  t: 'resolveConfig';
+  projectUri: string;
+}
+
+/** 标记 / 取消标记会话完成（archived） */
+export interface SetArchivedMsg {
+  t: 'setArchived';
+  id: string;
+  archived: boolean;
+}
+
+/** 请求可新建会话的项目列表 */
+export interface ListProjectsMsg {
+  t: 'listProjects';
+}
+
+export type PhoneCommand =
+  | HelloMsg
+  | SelectMsg
+  | SendMsg
+  | NewSessionMsg
+  | NewSessionInMsg
+  | ResolveConfigMsg
+  | SetArchivedMsg
+  | ListProjectsMsg;
 
 // ---------------------------------------------------------------------------
 // = daemon → 手机（事件）                                                    =
@@ -75,10 +145,34 @@ export interface WelcomeMsg {
   focus: string | null;
 }
 
-/** 会话列表更新 */
+/** 会话列表更新（含已标记完成的会话，archived=true；端上默认过滤，可切换显示） */
 export interface SessionsMsg {
   t: 'sessions';
   items: PhoneSession[];
+}
+
+/** 焦点会话变化（含 null = 无未完成会话；端上据此同步标题栏并清空旧视图） */
+export interface FocusMsg {
+  t: 'focus';
+  id: string | null;
+}
+
+/** 可新建会话的项目列表（listProjects 的回包） */
+export interface ProjectsMsg {
+  t: 'projects';
+  items: PhoneProject[];
+}
+
+/** 新建会话成功（daemon 已 select 到新会话；手机据此收起选择器） */
+export interface SessionCreatedMsg {
+  t: 'sessionCreated';
+  id: string;
+}
+
+/** 会话配置解析结果（resolveConfig 的回包；手机据此弹确认框） */
+export interface ConfigResolvedMsg {
+  t: 'configResolved';
+  config: PhoneSessionConfig;
 }
 
 /** 焦点会话视图快照（节流 100ms + 单调版本号，手机忽略过期版本） */
@@ -103,4 +197,13 @@ export interface ErrorMsg {
   msg: string;
 }
 
-export type DaemonEvent = WelcomeMsg | SessionsMsg | ChatMsg | HostMsg | ErrorMsg;
+export type DaemonEvent =
+  | WelcomeMsg
+  | SessionsMsg
+  | FocusMsg
+  | ProjectsMsg
+  | SessionCreatedMsg
+  | ConfigResolvedMsg
+  | ChatMsg
+  | HostMsg
+  | ErrorMsg;

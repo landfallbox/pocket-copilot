@@ -22,8 +22,15 @@ async function load(): Promise<DeviceRecord[]> {
   if (cache) return cache;
   try {
     const raw = await fsp.readFile(DEVICES_FILE, 'utf8');
-    const parsed = JSON.parse(raw) as DeviceRecord[];
-    cache = Array.isArray(parsed) ? parsed : [];
+    const parsed = JSON.parse(raw) as DeviceRecord | DeviceRecord[];
+    // 兼容两种历史格式：数组（新）或单个设备对象（旧版单设备）。
+    if (Array.isArray(parsed)) {
+      cache = parsed;
+    } else if (parsed && typeof parsed === 'object' && typeof parsed.token === 'string') {
+      cache = [parsed];
+    } else {
+      cache = [];
+    }
   } catch {
     cache = [];
   }

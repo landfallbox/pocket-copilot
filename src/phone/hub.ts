@@ -166,6 +166,61 @@ export class PhoneHub {
           msg: '发送失败：AHP 未连接或无焦点会话',
         });
       }
+      return;
+    }
+    if (cmd.t === 'newSession') {
+      // 在焦点项目下新建：先解析配置回给手机弹确认框
+      const projectUri = this.mirror.focusProjectUri();
+      if (!projectUri) {
+        this.send(state, { t: 'error', msg: '新建会话失败：当前无焦点项目' });
+        return;
+      }
+      void this.resolveConfigTo(state, projectUri);
+      return;
+    }
+    if (cmd.t === 'newSessionIn') {
+      void this.createSession(state, cmd.projectUri, cmd.config);
+      return;
+    }
+    if (cmd.t === 'resolveConfig') {
+      void this.resolveConfigTo(state, cmd.projectUri);
+      return;
+    }
+    if (cmd.t === 'setArchived') {
+      const ok = this.mirror.setArchived(cmd.id, cmd.archived);
+      if (!ok) {
+        this.send(state, { t: 'error', msg: '标记失败：AHP 未连接' });
+      }
+      return;
+    }
+    if (cmd.t === 'listProjects') {
+      void this.mirror.listProjects().then((items) => {
+        this.send(state, { t: 'projects', items });
+      });
+    }
+  }
+
+  /** 解析项目会话配置并回包 configResolved（手机据此弹确认框） */
+  private async resolveConfigTo(state: PhoneState, projectUri: string): Promise<void> {
+    const config = await this.mirror.resolveConfig(projectUri);
+    if (config) {
+      this.send(state, { t: 'configResolved', config });
+    } else {
+      this.send(state, { t: 'error', msg: '解析会话配置失败' });
+    }
+  }
+
+  /** 新建会话并回包 sessionCreated（失败回包 error） */
+  private async createSession(
+    state: PhoneState,
+    projectUri: string,
+    config?: Record<string, unknown>,
+  ): Promise<void> {
+    const id = await this.mirror.createSessionIn(projectUri, config);
+    if (id) {
+      this.send(state, { t: 'sessionCreated', id });
+    } else {
+      this.send(state, { t: 'error', msg: '新建会话失败' });
     }
   }
 
@@ -197,6 +252,11 @@ export class PhoneHub {
   /** 焦点会话切换中 */
   onFocusChanging(_sessionId: string): void {
     // 切换期间视图会先清空再填充，无需额外提示
+  }
+
+  /** 焦点会话变化（含 null）→ 立即推送，端上据此同步标题栏/清空旧视图 */
+  onFocus(sessionId: string | null): void {
+    this.broadcast({ t: 'focus', id: sessionId });
   }
 
   /** 焦点会话 ChatState 变化 → 重算视图 + 节流推送 */

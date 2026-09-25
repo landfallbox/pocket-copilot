@@ -39,6 +39,8 @@
 6. **批准 / 拒绝编辑**（逐步增强）
 7. **回答模型提问**（逐步增强）
 8. **打断运行中的请求**（逐步增强）
+9. **标记会话完成 / 恢复**（M4-5，对齐电脑端 done 语义）
+10. **新建会话**（当前项目下，M4-5）/ **新建项目**（从 VS Code 最近打开选择，M4-5）
 
 ### 基础支撑
 
@@ -82,6 +84,7 @@
 | **daemon 角色** | ① AHP 客户端：订阅根通道（会话列表）+ 焦点会话的 session/chat 通道，官方 `chatReducer` 维护 ChatState；② 简化手机协议网关（JSON over WS，推视图快照）；③ QR 配对（按设备发 deviceToken，原始 AHP token 不出电脑）；④ 健康探测 + VS Code 重启后自动重连 |
 | **手机协议粒度** | 快照制：daemon 维护完整 ChatState，状态变化节流 100ms 推**视图快照**（带单调版本号，手机忽略过期版本）；手机零 diff 逻辑 |
 | **镜像范围** | 只镜像"焦点会话"（手机正在看的那个 session + chat 通道）；手机切会话时 daemon 切订阅；不镜像全部会话 |
+| **会话完成（archived/done）处理（2026-09-24 定稿）** | **严格对齐电脑端 agent 窗口**：daemon 下发**全部**会话并带 `archived` 布尔标记，不过滤；手机端侧边栏默认过滤掉已完成的会话（项目下会话全部完成 → 该项目自然消失），并提供"显示已完成"开关用于查看/恢复。焦点会话被标记完成时 daemon 自动把焦点切到下一个未完成会话（无则置 null），经 `focus` 事件同步给手机。手机端可标记完成/恢复（`setArchived` → AHP `SessionIsArchivedChanged`） |
 | 配对方式 | QR 码：`pocket-copilot://pair?host=<Tailscale-IP>&port=8765&device=<deviceToken>`；Android deep link 解析后连 `ws://<host>:8765/ws` 发 `hello` 鉴权 |
 | PWA 过渡策略 | 保留直连 agent host 不动（开发/调试用）；不切到 daemon（用户 2026-09-23 决定跳过该过渡步骤，daemon 用 WS 脚本验证后直接进 Android） |
 | 前端技术栈（PWA，过渡期） | React 19 + Vite + TS + zustand（沿用 demo 已验证底座）；**移除 @assistant-ui/react**，展示层手写组件 |
@@ -202,6 +205,13 @@ jsonl 记录结构（抽样验证）：
 - 主要写动作（客户端可 dispatch）：`chat/pendingMessageSet`（queued/steering）/ `chat/toolCallConfirmed`（批准/拒绝）/ `chat/inputAnswerChanged` + `chat/inputCompleted`（回答提问）/ `chat/turnCancelled`（打断，细节 M3 验证）
 - 流式：`chat/delta`（文本增量）/ `chat/responsePart`（完整 part）/ `chat/usage`（token 统计）/ `chat/toolCall*`（工具调用生命周期）
 - diff：`SessionState.changesets` 提供可订阅的 changeset URI（uncommitted/会话级/逐 turn 视图）
+
+**archived（标记完成）相关事实（2026-09-24 验证）：**
+- `SessionStatus` 是**位掩码**：`Idle=1`、`IsRead=32`、`IsArchived=64`。一个普通空闲会话 status=33（Idle|IsRead），**不是** 1——判断空闲要用 `(status & 1) !== 0`，判断完成用 `(status & 64) !== 0`
+- 标记完成 = dispatch `SessionIsArchivedChanged {isArchived}`；对**有消息的真实会话**，服务端会回发 `sessionSummaryChanged`（`changes.status` 33↔97），可逆
+- **空会话（无消息）AHP 不跟踪**：不在 `listSessions` 里，dispatch 后也不回发 `sessionSummaryChanged`。故 daemon 在 `setArchived` 里做本地乐观更新 + 立即重发列表（真实会话的后续回流是幂等覆盖）
+- `createSession` 返回 null；新会话在首条消息前不出现在 `listSessions`，故 daemon 需合成一条 `SessionSummary` 推给手机
+- `resolveSessionConfig` 默认值含 `isolation:'worktree'`（所以新建会话要弹确认框让用户选 folder/worktree）
 
 ## 8. 数据面（已退役，历史记录）
 
@@ -335,6 +345,12 @@ Spike 链：**1.5a → 1.5 → 2（已完成，方案退役）→ 3（AHP 端到
    - **M4-4** 真机验收 + 文档收尾：
      - 动作：① 修完 M4-1 后真机（Tailscale）跑完整链路（配对 → 会话列表 → 流式渲染 → 切会话 → 发消息 → 历史分页）并记录结果；② 更新本文档里程碑表与验收记录；③ 小项（不阻塞）：daemon 侧设备名硬编码 `'phone'`，配对时可带设备名
      - 验收：M4 里程碑状态更新为 ✅，本文档同步
+   - **M4-5 会话完成对齐 + 新建会话/项目（2026-09-24 完成）**：严格对齐电脑端 agent 窗口
+     - 会话完成（archived/done）：daemon 下发全部会话带 `archived` 标记，端上默认过滤（项目下全完成则项目消失）+ 侧边栏"显示已完成"开关；焦点会话标记完成时 daemon 自动切焦点（`focus` 事件，含 null）；手机端标题下拉可标记完成/恢复（`setArchived` → AHP `SessionIsArchivedChanged`）。空会话 AHP 不跟踪，daemon 做乐观更新
+     - 新建会话：手机 `newSession`（默认焦点项目）→ daemon 回 `configResolved`（isolation/mode 等）→ 手机弹确认框 → `newSessionIn` → daemon `createSession` + `select` + 合成摘要 → `sessionCreated`
+     - 新建项目：侧边栏 `listProjects`（合并 AHP 会话目录 + VS Code 最近打开，见 `src/ahp/projects.ts` 读 `state.vscdb`/`storage.json`）→ 项目选择器 → 复用新建会话确认流程
+     - 协议新增命令：`newSession` / `newSessionIn` / `resolveConfig` / `setArchived` / `listProjects`；新增事件：`projects` / `sessionCreated` / `configResolved` / `focus`
+     - 验收：WS 脚本 7/7 通过（archived 标记 / 焦点切走 / listProjects / resolveConfig / newSessionIn）；Android `assembleDebug` 通过
 8. **M5 写增强 + 体验**：批准/拒绝（`chat/toolCallConfirmed`）、回答提问（`chat/inputAnswerChanged`/`inputCompleted`）、打断（`chat/turnCancelled` 细节验证）、托盘、推送、diff 完整交互
 
 ## 16. 用户偏好（新会话必须遵守）
