@@ -145,7 +145,7 @@ sealed class DaemonEvent {
                                 label = oo.get("label")?.takeIf { !it.isJsonNull }?.asString.orEmpty(),
                                 value = oo.get("value")?.takeIf { !it.isJsonNull }?.asString,
                                 options = oo.getAsJsonArray("options")
-                                    ?.map { ito.asString }
+                                    ?.mapNotNull { ito -> ito.takeIf { e -> e.isJsonPrimitive }?.asString }
                                     .orEmpty(),
                             )
                         }.orEmpty(),

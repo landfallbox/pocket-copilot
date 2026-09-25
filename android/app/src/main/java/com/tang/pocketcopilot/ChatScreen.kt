@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -35,6 +36,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
@@ -47,6 +50,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
@@ -54,6 +58,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Terminal
@@ -166,10 +171,13 @@ fun ChatScreen(vm: AppViewModel) {
             .collect { drawerOpen = it }
     }
     var titleMenuOpen by remember { mutableStateOf(false) }
+    var overflowMenuOpen by remember { mutableStateOf(false) }
     var confirmDisconnect by remember { mutableStateOf(false) }
     // 标题在窗口中的位置（px，自定义下拉菜单居中定位用）
     var titleCenterX by remember { mutableStateOf(0) }
     var titleBottom by remember { mutableStateOf(0) }
+    var moreBtnRight by remember { mutableStateOf(0) }
+    var moreBtnBottom by remember { mutableStateOf(0) }
 
     val v = view
     val running = v?.streaming == true
@@ -261,7 +269,26 @@ fun ChatScreen(vm: AppViewModel) {
                         }
                     }
                 }
-                StatusDot(clientState)
+                // 新建会话（同时刷新项目列表，供弹窗内切换项目归属）
+                IconButton(onClick = { vm.listProjects(); vm.newSession() }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Filled.Add, contentDescription = "新建会话", tint = Fg, modifier = Modifier.size(20.dp))
+                }
+                // 更多操作
+                IconButton(
+                    onClick = {
+                        titleMenuOpen = false
+                        overflowMenuOpen = !overflowMenuOpen
+                    },
+                    modifier = Modifier
+                        .size(32.dp)
+                        .onGloballyPositioned { coords ->
+                            val pos = coords.positionInRoot()
+                            moreBtnRight = (pos.x + coords.size.width).roundToInt()
+                            moreBtnBottom = (pos.y + coords.size.height).roundToInt()
+                        },
+                ) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "更多操作", tint = Fg, modifier = Modifier.size(20.dp))
+                }
             }
 
             // ---- 会话切换菜单：自定义 Popup，水平中心对准标题中心（M3 1.3 的 DropdownMenu 不支持居中锚定）----
@@ -318,15 +345,38 @@ fun ChatScreen(vm: AppViewModel) {
                                 }
                             }
                         }
-                        // 标记完成 / 恢复（archived）
-                        val focused = sessions.firstOrNull { it.id == focus }
+                    }
+                }
+            }
+
+            // ---- 更多操作菜单（⋮）：标记当前会话完成 / 恢复 ----
+            if (overflowMenuOpen) {
+                val density = LocalDensity.current
+                val menuWidthPx = with(density) { 200.dp.toPx().roundToInt() }
+                val marginPx = with(density) { 8.dp.toPx().roundToInt() }
+                val focused = sessions.firstOrNull { it.id == focus }
+                Popup(
+                    alignment = Alignment.TopStart,
+                    offset = IntOffset(
+                        x = (moreBtnRight - menuWidthPx).coerceAtLeast(marginPx),
+                        y = moreBtnBottom + with(density) { 4.dp.toPx().roundToInt() },
+                    ),
+                    onDismissRequest = { overflowMenuOpen = false },
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .width(200.dp)
+                            .shadow(8.dp, RoundedCornerShape(12.dp), ambientColor = Color(0x99000000), spotColor = Color(0x99000000))
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF2D2F31))
+                            .border(1.dp, Color(0xFF3F4245), RoundedCornerShape(12.dp)),
+                    ) {
                         if (focused != null) {
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = Color(0xFF3F4245))
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        titleMenuOpen = false
+                                        overflowMenuOpen = false
                                         vm.setArchived(focused.id, !focused.archived)
                                     }
                                     .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -340,7 +390,7 @@ fun ChatScreen(vm: AppViewModel) {
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    if (focused.archived) "恢复会话" else "标记为完成",
+                                    if (focused.archived) "恢复会话" else "标记当前会话为已完成",
                                     color = Fg,
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
@@ -547,21 +597,11 @@ fun ChatScreen(vm: AppViewModel) {
                 sessions = visibleSessions,
                 showArchived = showArchived,
                 onToggleArchived = { vm.setShowArchived(it) },
-                projects = projects,
                 focus = focus,
                 onPick = { id ->
                     vm.select(id)
                     drawerOpen = false
                 },
-                onNewSession = {
-                    vm.newSession()
-                    drawerOpen = false
-                },
-                onNewProjectIn = { projectUri ->
-                    vm.resolveConfig(projectUri)
-                    drawerOpen = false
-                },
-                onListProjects = { vm.listProjects() },
                 onDisconnect = { confirmDisconnect = true },
             )
         }
@@ -586,60 +626,167 @@ fun ChatScreen(vm: AppViewModel) {
                 },
             )
         }
-        // ---- 新建会话确认弹窗（展示 isolation/mode 等，让用户确认）----
-        pendingConfig?.let { pc -> NewSessionConfirmDialog(config = pc, onConfirm = { cfg -> vm.confirmNewSession(cfg) }, onDismiss = { vm.cancelNewSession() }) }
+        // ---- 新建会话确认弹窗（项目归属 + isolation 开关，其余用服务端默认）----
+        pendingConfig?.let { pc ->
+            NewSessionConfirmDialog(
+                config = pc,
+                projects = projects,
+                onProjectChanged = { uri -> vm.resolveConfig(uri) },
+                onConfirm = { cfg -> vm.confirmNewSession(cfg) },
+                onDismiss = { vm.cancelNewSession() },
+            )
+        }
     }
 }
 
-/** 新建会话确认弹窗：列出可配置项（isolation/mode/...），用户可调后确认创建 */
+/** 新建会话确认弹窗：项目归属下拉框（默认当前会话项目）+ isolation 开关，其余用服务端默认 */
 @Composable
 private fun NewSessionConfirmDialog(
     config: PhoneSessionConfig,
+    projects: List<PhoneProject>,
+    onProjectChanged: (projectUri: String) -> Unit,
     onConfirm: (Map<String, Any>?) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    // 用户可调整的配置值（key → 选中值），初始为服务端默认
-    var values by remember(config) {
-        mutableStateOf(config.options.associate { it.key to (it.value ?: it.options.firstOrNull() ?: "") })
+    // 服务端解析出的默认值（提交时全量带回，仅 isolation 由开关决定）
+    val defaults = remember(config) {
+        config.options.associate { it.key to (it.value ?: it.options.firstOrNull() ?: "") }
+    }
+    var useWorktree by remember(config) { mutableStateOf(defaults["isolation"] == "worktree") }
+    var projectMenuOpen by remember { mutableStateOf(false) }
+    // 项目框位置/尺寸（px，自定义下拉菜单对齐用）
+    var projBoxPos by remember { mutableStateOf(IntOffset.Zero) }
+    var projBoxWidth by remember { mutableStateOf(0) }
+    var projBoxHeight by remember { mutableStateOf(0) }
+    val projectName = remember(config, projects) {
+        projects.firstOrNull { it.uri == config.projectUri }?.name
+            ?: config.projectUri.substringAfterLast('/').ifEmpty { "(未命名项目)" }
     }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("新建会话") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                config.options.forEach { opt ->
-                    if (opt.options.isEmpty()) {
-                        // 无可选值：只读展示
-                        Column {
-                            Text(opt.label, style = MaterialTheme.typography.labelMedium, color = MutedFg)
-                            Text(values[opt.key] ?: "-", style = MaterialTheme.typography.bodyMedium, color = Fg)
-                        }
-                    } else {
-                        Column {
-                            Text(opt.label, style = MaterialTheme.typography.labelMedium, color = MutedFg)
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier.padding(top = 4.dp),
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                // 项目归属：默认当前会话项目，可下拉切换（切换后重新解析该项目配置）
+                Column {
+                    Text("项目归属", style = MaterialTheme.typography.labelMedium, color = MutedFg)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .border(1.dp, Border, RoundedCornerShape(8.dp))
+                            .onGloballyPositioned { coords ->
+                                val pos = coords.positionInRoot()
+                                projBoxPos = IntOffset(pos.x.roundToInt(), pos.y.roundToInt())
+                                projBoxWidth = coords.size.width
+                                projBoxHeight = coords.size.height
+                            }
+                            .clickable { projectMenuOpen = true }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.Folder,
+                            contentDescription = null,
+                            tint = MutedFg,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            projectName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Fg,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Icon(Icons.Filled.ExpandMore, contentDescription = "切换项目", tint = MutedFg, modifier = Modifier.size(18.dp))
+                    }
+                    // 项目下拉：与 app 其他菜单同款样式（深色圆角 + 描边 + 阴影），宽度对齐项目框
+                    if (projectMenuOpen) {
+                        val density = LocalDensity.current
+                        val gapPx = with(density) { 4.dp.toPx().roundToInt() }
+                        Popup(
+                            alignment = Alignment.TopStart,
+                            offset = IntOffset(projBoxPos.x, projBoxPos.y + projBoxHeight + gapPx),
+                            onDismissRequest = { projectMenuOpen = false },
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .width(projBoxWidth.dp)
+                                    .heightIn(max = 280.dp)
+                                    .verticalScroll(rememberScrollState())
+                                    .shadow(8.dp, RoundedCornerShape(12.dp), ambientColor = Color(0x99000000), spotColor = Color(0x99000000))
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0xFF2D2F31))
+                                    .border(1.dp, Color(0xFF3F4245), RoundedCornerShape(12.dp))
+                                    .padding(vertical = 4.dp),
                             ) {
-                                opt.options.forEach { o ->
-                                    val selected = values[opt.key] == o
-                                    Surface(
-                                        onClick = { values = values + (opt.key to o) },
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = if (selected) Accent else CardBg,
-                                        contentColor = if (selected) Color.White else Fg,
+                                if (projects.isEmpty()) {
+                                    Text(
+                                        "暂无可选项目",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MutedFg,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    )
+                                }
+                                projects.forEach { p ->
+                                    val selected = p.uri == config.projectUri
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                projectMenuOpen = false
+                                                if (!selected) onProjectChanged(p.uri)
+                                            }
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
                                     ) {
-                                        Text(o, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+                                        Icon(
+                                            Icons.Filled.Folder,
+                                            contentDescription = null,
+                                            tint = if (selected) Accent else MutedFg,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                        Spacer(Modifier.width(10.dp))
+                                        Text(
+                                            p.name,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = if (selected) Accent else Fg,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        if (selected) {
+                                            Spacer(Modifier.width(8.dp))
+                                            Icon(Icons.Filled.Check, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+                // isolation 开关
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("新建 worktree", style = MaterialTheme.typography.bodyLarge, color = Fg)
+                        Text(
+                            if (useWorktree) "在独立 worktree 中创建新会话" else "直接在主仓（主分支）上开发",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MutedFg,
+                        )
+                    }
+                    Switch(checked = useWorktree, onCheckedChange = { useWorktree = it })
+                }
             }
         },
         confirmButton = {
             TextButton(onClick = {
+                val values = defaults.toMutableMap()
+                values["isolation"] = if (useWorktree) "worktree" else "folder"
                 onConfirm(values.filterValues { it.isNotBlank() }.ifEmpty { null })
             }) { Text("创建") }
         },
@@ -654,18 +801,13 @@ private fun Sidebar(
     sessions: List<PhoneSession>,
     showArchived: Boolean,
     onToggleArchived: (Boolean) -> Unit,
-    projects: List<PhoneProject>,
     focus: String?,
     onPick: (String) -> Unit,
-    onNewSession: () -> Unit,
-    onNewProjectIn: (projectUri: String) -> Unit,
-    onListProjects: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
     val activeProject = remember(sessions, focus) {
         sessions.firstOrNull { it.id == focus }?.project
     }
-    var projectPickerOpen by remember { mutableStateOf(false) }
     // 按项目分组，组内按修改时间倒序，组间按最近活动倒序（匹配 PWA）
     val groups = remember(sessions) {
         sessions
@@ -697,21 +839,6 @@ private fun Sidebar(
                 color = Fg,
                 modifier = Modifier.weight(1f),
             )
-            IconButton(
-                onClick = onNewSession,
-                modifier = Modifier.size(32.dp),
-            ) {
-                Icon(Icons.Filled.Add, contentDescription = "新建会话", tint = Fg, modifier = Modifier.size(20.dp))
-            }
-            IconButton(
-                onClick = {
-                    onListProjects()
-                    projectPickerOpen = true
-                },
-                modifier = Modifier.size(32.dp),
-            ) {
-                Icon(Icons.Filled.Folder, contentDescription = "新建项目", tint = Fg, modifier = Modifier.size(20.dp))
-            }
         }
         if (groups.isEmpty()) {
             Text(
@@ -798,61 +925,7 @@ private fun Sidebar(
                 color = Color(0xFFF48771),
             )
         }
-        // 新建项目选择器：只列出 VS Code 以前打开过的项目（对齐 agent 窗口）
-        if (projectPickerOpen) {
-            AlertDialog(
-                onDismissRequest = { projectPickerOpen = false },
-                title = { Text("新建项目") },
-                text = {
-                    if (projects.isEmpty()) {
-                        Text("暂无可选项目", color = MutedFg)
-                    } else {
-                        Column {
-                            projects.forEach { p ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            projectPickerOpen = false
-                                            onNewProjectIn(p.uri)
-                                        }
-                                        .padding(vertical = 10.dp, horizontal = 4.dp),
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Folder,
-                                        contentDescription = null,
-                                        tint = MutedFg,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(p.name, color = Fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { projectPickerOpen = false }) { Text("关闭") }
-                },
-            )
-        }
     }
-}
-
-@Composable
-private fun StatusDot(status: PocketClient.ClientState) {
-    val color = when (status) {
-        PocketClient.ClientState.AUTHENTICATED -> Success
-        PocketClient.ClientState.CONNECTING -> Color(0xFFFFC107)
-        PocketClient.ClientState.DISCONNECTED -> Color(0xFFF48771)
-    }
-    Box(
-        modifier = Modifier
-            .padding(start = 4.dp)
-            .size(10.dp)
-            .background(color, CircleShape),
-    )
 }
 
 // ---- 消息渲染（匹配 PWA：用户右对齐气泡，助手全宽 + Markdown + 步骤折叠）----

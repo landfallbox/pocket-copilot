@@ -171,6 +171,7 @@ export class PhoneHub {
     if (cmd.t === 'newSession') {
       // 在焦点项目下新建：先解析配置回给手机弹确认框
       const projectUri = this.mirror.focusProjectUri();
+      log('hub', `newSession：焦点=${this.mirror.focusSessionId ?? 'null'} 项目=${projectUri ?? 'null'}`);
       if (!projectUri) {
         this.send(state, { t: 'error', msg: '新建会话失败：当前无焦点项目' });
         return;
