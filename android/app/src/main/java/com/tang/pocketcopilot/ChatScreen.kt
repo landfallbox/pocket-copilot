@@ -4,13 +4,19 @@ import android.graphics.Typeface
 import android.text.method.LinkMovementMethod
 import android.widget.TextView
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.rememberSplineBasedDecay
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.AnchoredDraggableState
+import androidx.compose.foundation.gestures.DraggableAnchors
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.anchoredDraggable
+import androidx.compose.foundation.gestures.animateTo
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -60,6 +67,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -93,6 +101,7 @@ import io.noties.markwon.syntax.SyntaxHighlightPlugin
 import io.noties.markwon.syntax.VscDarkPlusTheme
 import io.noties.prism4j.Prism4j
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 // ---- VS Code Dark 2026 色板（1:1 对齐 PWA 的 --vscode-* 变量）----
 private val Bg = Color(0xFF121314)
@@ -108,6 +117,7 @@ private val Link = Color(0xFF48A0C7)
 private val Success = Color(0xFF54B054)
 
 /** 聊天主屏：匹配 PWA 布局（顶栏 + 抽屉 + 消息流 + 输入框） */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(vm: AppViewModel) {
     val clientState by vm.clientState.collectAsStateWithLifecycle()
@@ -118,6 +128,33 @@ fun ChatScreen(vm: AppViewModel) {
 
     var input by remember { mutableStateOf("") }
     var drawerOpen by remember { mutableStateOf(false) }
+    // 抽屉拖拽状态：AnchoredDraggable 负责跟手/阈值/甩动，drawerOpen 用于遮罩与程序化开关
+    val density = LocalDensity.current
+    val drawerWidthPx = with(density) { 280.dp.toPx() }
+    val drawerDecay = rememberSplineBasedDecay<Float>()
+    val drawerState = remember(drawerWidthPx) {
+        AnchoredDraggableState(
+            initialValue = false,
+            anchors = DraggableAnchors {
+                false.at(-drawerWidthPx) // 关闭：移出屏幕左侧
+                true.at(0f)              // 打开
+            },
+            positionalThreshold = { it * 0.5f },
+            velocityThreshold = { with(density) { 500.dp.toPx() } },
+            snapAnimationSpec = tween(durationMillis = 220),
+            decayAnimationSpec = drawerDecay,
+        )
+    }
+    // 程序化开关（菜单按钮 / 遮罩点击 / 选中会话）
+    LaunchedEffect(drawerOpen) {
+        drawerState.animateTo(drawerOpen)
+    }
+    // 拖拽 settle 后回写，保持遮罩与状态同步
+    LaunchedEffect(drawerState) {
+        snapshotFlow { drawerState.settledValue }
+            .distinctUntilChanged()
+            .collect { drawerOpen = it }
+    }
     var titleMenuOpen by remember { mutableStateOf(false) }
     var confirmDisconnect by remember { mutableStateOf(false) }
     // 标题在窗口中的位置（px，自定义下拉菜单居中定位用）
@@ -456,15 +493,17 @@ fun ChatScreen(vm: AppViewModel) {
                     .clickable { drawerOpen = false },
             )
         }
-        // ---- 会话抽屉：项目分组（匹配 PWA Sidebar）----
-        AnimatedVisibility(
-            visible = drawerOpen,
+        // ---- 会话抽屉：项目分组（匹配 PWA Sidebar）；抽屉内左滑关闭（AnchoredDraggable 跟手 + 阈值/甩动）----
+        Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .fillMaxHeight()
-                .width(280.dp),
-            enter = slideInHorizontally(initialOffsetX = { -it }),
-            exit = slideOutHorizontally(targetOffsetX = { -it }),
+                .width(280.dp)
+                .offset { IntOffset(drawerState.requireOffset().roundToInt(), 0) }
+                .anchoredDraggable(
+                    state = drawerState,
+                    orientation = Orientation.Horizontal,
+                ),
         ) {
             Sidebar(
                 sessions = sessions,
