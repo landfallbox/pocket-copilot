@@ -196,20 +196,23 @@ fun ChatScreen(vm: AppViewModel) {
     }
 
     val listState = rememberLazyListState()
-    val messageCount = v?.messages?.size ?: 0
     // reverseLayout:索引 0 = 最新消息,天然锚定在视口底部(键盘弹出/收起时保持可见)。
-    // 切换会话时直接跳到最新消息(否则沿用上一会话的滚动位置,看起来像"落后");
-    // 同会话内用户已在底部时,新消息到来或流式更新自动跟随
+    // 切换会话时直接跳到最新消息(否则沿用上一会话的滚动位置,看起来像"落后")。
     var lastFocus by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(focus, messageCount, running) {
-        if (messageCount == 0) return@LaunchedEffect
-        if (lastFocus != focus) {
-            lastFocus = focus
+    LaunchedEffect(focus) {
+        if (focus == null || lastFocus == focus) return@LaunchedEffect
+        lastFocus = focus
+        listState.scrollToItem(0)
+    }
+    // 流式自动跟随:reverseLayout 下 index 0 = 最新消息锚在视口底部。
+    // 不能依赖 layoutInfo 派生 state 触发——layoutInfo 是同一对象原地修改,
+    // snapshot 等值判断认为"没变",derivedStateOf/LaunchedEffect 不会重启。
+    // 改用 v(每个流式 delta 都是新的 ChatView 引用,必变)作为 key:
+    // 内容增长时若在底部则显式 scrollToItem(0) 重新锚定;用户上滑看历史时
+    // canScrollBackward=true 不滚动,避免被拉回。
+    LaunchedEffect(v) {
+        if (v != null && !listState.canScrollBackward) {
             listState.scrollToItem(0)
-            return@LaunchedEffect
-        }
-        if (listState.firstVisibleItemIndex == 0) {
-            listState.animateScrollToItem(0)
         }
     }
 
@@ -484,11 +487,15 @@ fun ChatScreen(vm: AppViewModel) {
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     // reverseLayout 把 index 0 钉在底部,故反转消息列表使最新消息位于 index 0(底部),
-                    // 上滑查看更早消息;新消息追加后自动锚定在底部
-                    items(v.messages.reversed(), key = { it.hashCode() }) { msg ->
+                    // 上滑查看更早消息;新消息追加后自动锚定在底部。
+                    // key 必须用稳定 id:助手消息 parts 每个 delta 都在变,hashCode 会逐帧变化,
+                    // 导致 LazyColumn 把该项当"删除+插入"整块重建,流式文本只能一段段跳出来。
+                    // streaming 按消息自身 done 判断:全局 running 在"turn 刚开始还没产出 parts"
+                    // 时会把上一条已完成消息误标为进行中。
+                    items(v.messages.reversed(), key = { it.id }) { msg ->
                         when (msg) {
                             is PhoneMessage.User -> UserBubble(msg.text)
-                            is PhoneMessage.Assistant -> AssistantMessage(msg.parts, streaming = running)
+                            is PhoneMessage.Assistant -> AssistantMessage(msg.parts, streaming = !msg.done)
                         }
                     }
                     // 排队消息(紧跟最新消息之后,位于列表顶部)
@@ -992,15 +999,19 @@ private fun groupParts(parts: List<Part>): List<Block> {
 
 @Composable
 private fun StepsGroup(parts: List<Part>, isLast: Boolean) {
-    var expanded by remember { mutableStateOf(false) }
     val done = !isLast
+    // 进行中(isLast)自动展开,让工具调用/思考逐步可见(对齐 PC 端行为);
+    // turn 结束或正文开始输出后(done)自动折叠为 "Finished with N steps"。
+    // 用户手动点击后以用户选择为准,不再自动切换(纯派生状态,无 effect 闪烁)。
+    var userExpanded by remember { mutableStateOf<Boolean?>(null) }
+    val expanded = userExpanded ?: !done
     val title = if (done) "Finished with ${parts.size} steps" else "Working…"
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(8.dp))
-                .clickable { expanded = !expanded }
+                .clickable { userExpanded = !expanded }
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1163,6 +1174,9 @@ private fun MarkdownText(text: String) {
             )
             .build()
     }
+    // 流式时每个快照都会重放 update;历史文本块内容不变,跳过重复解析以避免 O(n²) 卡顿。
+    // 同时记录 TextView 实例:视图被重建(状态未重置)时强制重设,避免空白。
+    val lastRender = remember { object { var tv: TextView? = null; var text: String = "" } }
     AndroidView(
         factory = { ctx ->
             TextView(ctx).apply {
@@ -1174,7 +1188,11 @@ private fun MarkdownText(text: String) {
             }
         },
         update = { tv ->
-            markwon.setMarkdown(tv, text)
+            if (lastRender.tv !== tv || lastRender.text != text) {
+                lastRender.tv = tv
+                lastRender.text = text
+                markwon.setMarkdown(tv, text)
+            }
         },
         modifier = Modifier.fillMaxWidth(),
     )

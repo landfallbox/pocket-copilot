@@ -34,8 +34,11 @@ sealed class Part {
 
 /** 展示消息（由 AHP ChatState 转换而来） */
 sealed class PhoneMessage {
-    data class User(val id: String, val text: String, val queued: Boolean = false) : PhoneMessage()
-    data class Assistant(val id: String, val parts: List<Part>, val done: Boolean) : PhoneMessage()
+    /** 稳定消息 id（daemon 端 ${turnId}-user / ${turnId}-asst），供列表 key 跨快照复用 */
+    abstract val id: String
+
+    data class User(override val id: String, val text: String, val queued: Boolean = false) : PhoneMessage()
+    data class Assistant(override val id: String, val parts: List<Part>, val done: Boolean) : PhoneMessage()
 
     companion object {
         fun fromJson(o: JsonObject): PhoneMessage? =
