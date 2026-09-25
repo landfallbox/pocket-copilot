@@ -130,20 +130,23 @@ fun ChatScreen(vm: AppViewModel) {
     }
 
     val listState = rememberLazyListState()
-    val messageCount = v?.messages?.size ?: 0
     // reverseLayout:索引 0 = 最新消息,天然锚定在视口底部(键盘弹出/收起时保持可见)。
-    // 切换会话时直接跳到最新消息(否则沿用上一会话的滚动位置,看起来像"落后");
-    // 同会话内用户已在底部时,新消息到来或流式更新自动跟随
+    // 切换会话时直接跳到最新消息(否则沿用上一会话的滚动位置,看起来像"落后")。
     var lastFocus by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(focus, messageCount, running) {
-        if (messageCount == 0) return@LaunchedEffect
-        if (lastFocus != focus) {
-            lastFocus = focus
+    LaunchedEffect(focus) {
+        if (focus == null || lastFocus == focus) return@LaunchedEffect
+        lastFocus = focus
+        listState.scrollToItem(0)
+    }
+    // 流式自动跟随:reverseLayout 下 index 0 = 最新消息锚在视口底部。
+    // 不能依赖 layoutInfo 派生 state 触发——layoutInfo 是同一对象原地修改,
+    // snapshot 等值判断认为"没变",derivedStateOf/LaunchedEffect 不会重启。
+    // 改用 v(每个流式 delta 都是新的 ChatView 引用,必变)作为 key:
+    // 内容增长时若在底部则显式 scrollToItem(0) 重新锚定;用户上滑看历史时
+    // canScrollBackward=true 不滚动,避免被拉回。
+    LaunchedEffect(v) {
+        if (v != null && !listState.canScrollBackward) {
             listState.scrollToItem(0)
-            return@LaunchedEffect
-        }
-        if (listState.firstVisibleItemIndex == 0) {
-            listState.animateScrollToItem(0)
         }
     }
 
